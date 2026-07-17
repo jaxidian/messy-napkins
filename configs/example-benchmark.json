@@ -2,7 +2,21 @@
   "name": "quick-local-baseline",
   "model": {
     "id": "example-model-q4",
-    "backend": "vulkan",
+    "engine": {
+      "name": "ollama",
+      "version": "0.1.34",
+      "accelerator": "vulkan"
+    },
+    "hardware": {
+      "gpu": "AMD RX 7900 XTX",
+      "vram_gb": 24.0,
+      "cpu": "AMD Ryzen 9 7950X",
+      "os": "Ubuntu 24.04"
+    },
+    "quantization": "Q4_K_M",
+    "parameter_count": "7B",
+    "seed": 42,
+    "max_tokens": 512,
     "context_size": 32768,
     "parameters": {
       "temperature": 0.2,
@@ -10,6 +24,7 @@
     }
   },
   "runner": {
+    "type": "subprocess",
     "command": [
       "python3",
       "-c",
@@ -32,17 +47,20 @@
     {
       "id": "code-gen-hello-world",
       "task": "code_gen",
-      "prompt": "Write a Python hello world function."
+      "prompt": "Write a Python hello world function.",
+      "trials": 3
     },
     {
       "id": "docs-api-summary",
       "task": "docs",
-      "prompt": "Document an API endpoint that creates a user."
+      "prompt": "Document an API endpoint that creates a user.",
+      "trials": 3
     },
     {
       "id": "prompt-following",
       "task": "system_prompt_following",
-      "prompt": "Respond with exactly three bullet points about observability."
+      "prompt": "Respond with exactly three bullet points about observability.",
+      "trials": 3
     }
   ]
 }
