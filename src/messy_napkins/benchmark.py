@@ -49,7 +49,7 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
 
                 events = selector.select(timeout=POLL_INTERVAL_SECONDS)
                 for key, _ in events:
-                    chunk = key.fileobj.read1(4096)
+                    chunk = key.fileobj.read(4096)
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue

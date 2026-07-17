@@ -21,7 +21,7 @@
     "command": [
       "python",
       "-c",
-      "import json,sys; payload=sys.stdin.read(); print(json.dumps({'score': len(payload) / 10}))"
+      "import json,sys; text=sys.stdin.read(); print(json.dumps({'score': len(text) / 10}))"
     ],
     "timeout_seconds": 30
   },
