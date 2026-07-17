@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import selectors
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Callable
 
 from .config import BenchmarkCase, BenchmarkConfig
 
 MIN_DURATION_SECONDS = 0.0001
-POLL_INTERVAL_SECONDS = 0.01
 
 
 def estimate_token_count(text: str) -> int:
@@ -33,44 +31,52 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
     ) as process:
         if process.stdout is None or process.stderr is None:
             raise RuntimeError("Prompt command must expose stdout and stderr pipes for telemetry.")
-        os.set_blocking(process.stdout.fileno(), False)
-        os.set_blocking(process.stderr.fileno(), False)
 
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
         first_output_at: float | None = None
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
-        selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
+
+        def read_stream(
+            stream: BinaryIO,
+            chunks: list[bytes],
+            on_chunk: Callable[[bytes], None] | None = None,
+        ) -> None:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if on_chunk is not None:
+                    on_chunk(chunk)
+
+        def maybe_record_first_output(chunk: bytes) -> None:
+            nonlocal first_output_at
+            if first_output_at is None and chunk.strip():
+                first_output_at = time.perf_counter()
+
+        stdout_thread = threading.Thread(
+            target=read_stream,
+            args=(process.stdout, stdout_chunks, maybe_record_first_output),
+        )
+        stderr_thread = threading.Thread(
+            target=read_stream,
+            args=(process.stderr, stderr_chunks),
+        )
+        stdout_thread.start()
+        stderr_thread.start()
 
         try:
-            while selector.get_map():
-                if time.perf_counter() - start > timeout_seconds:
-                    process.kill()
-                    process.wait()
-                    raise RuntimeError(f"Prompt command timed out after {timeout_seconds} seconds.")
-
-                events = selector.select(timeout=POLL_INTERVAL_SECONDS)
-                for key, _ in events:
-                    try:
-                        chunk = key.fileobj.read(4096)
-                    except BlockingIOError:
-                        continue
-
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-
-                    if key.data == "stdout":
-                        stdout_chunks.append(chunk)
-                        if first_output_at is None and chunk.strip():
-                            first_output_at = time.perf_counter()
-                    else:
-                        stderr_chunks.append(chunk)
+            return_code = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait()
+            raise RuntimeError(
+                f"Prompt command timed out after {timeout_seconds} seconds."
+            ) from exc
         finally:
-            selector.close()
+            stdout_thread.join()
+            stderr_thread.join()
 
-        return_code = process.wait()
         end = time.perf_counter()
 
     if return_code != 0:
