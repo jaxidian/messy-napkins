@@ -27,7 +27,7 @@ AISLOP_JSON_SCORE_COMMAND = [
 ]
 
 AISLOP_FLOAT_SCORE_COMMAND = [sys.executable, "-c", "print('0.42')"]
-SLOW_RUNNER_COMMAND = [sys.executable, "-c", "import time; time.sleep(1); print('too-late')"]
+SLOW_RUNNER_COMMAND = [sys.executable, "-c", "import time; time.sleep(2); print('too-late')"]
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
@@ -94,7 +94,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
 
     def test_run_prompt_timeout_raises(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "timed out"):
-            run_prompt(command=SLOW_RUNNER_COMMAND, prompt="ignored", timeout_seconds=0.01)
+            run_prompt(command=SLOW_RUNNER_COMMAND, prompt="ignored", timeout_seconds=0.5)
 
 
 if __name__ == "__main__":

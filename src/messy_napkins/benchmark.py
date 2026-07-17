@@ -12,6 +12,7 @@ from typing import Any, BinaryIO, Callable
 from .config import BenchmarkCase, BenchmarkConfig
 
 MIN_DURATION_SECONDS = 0.0001
+CHUNK_SIZE_BYTES = 4096
 
 
 def estimate_token_count(text: str) -> int:
@@ -42,7 +43,7 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
             on_chunk: Callable[[bytes], None] | None = None,
         ) -> None:
             while True:
-                chunk = stream.read(4096)
+                chunk = stream.read(CHUNK_SIZE_BYTES)
                 if not chunk:
                     break
                 chunks.append(chunk)
