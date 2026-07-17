@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import statistics
 import subprocess
 import threading
@@ -16,14 +17,125 @@ from .config import BenchmarkCase, BenchmarkConfig
 MIN_DURATION_SECONDS = 0.0001
 CHUNK_SIZE_BYTES = 4096
 STREAM_JOIN_TIMEOUT_SECONDS = 1.0
+VRAM_SAMPLE_INTERVAL_SECONDS = 0.2
+
+
+def _sample_vram_nvidia_smi(nvidia_smi_path: str) -> float | None:
+    try:
+        result = subprocess.run(
+            [nvidia_smi_path, "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    values = [float(line) for line in result.stdout.strip().splitlines() if line.strip()]
+    return max(values) if values else None
+
+
+def _sample_vram_rocm_smi(rocm_smi_path: str) -> float | None:
+    try:
+        result = subprocess.run(
+            [rocm_smi_path, "--showmeminfo", "vram", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    used_bytes = [
+        float(gpu["VRAM Total Used Memory (B)"])
+        for gpu in data.values()
+        if isinstance(gpu, dict) and "VRAM Total Used Memory (B)" in gpu
+    ]
+    return max(used_bytes) / (1024 * 1024) if used_bytes else None
+
+
+def detect_vram_sample_fn() -> Callable[[], float | None] | None:
+    """Return a callable that reports current VRAM usage in MB, or None if no
+    supported GPU tool (``nvidia-smi``/``rocm-smi``) is found on PATH.
+
+    Sampling is best-effort: any error or unrecognized output yields None for
+    that sample rather than failing the benchmark run.
+    """
+
+    nvidia_smi_path = shutil.which("nvidia-smi")
+    if nvidia_smi_path:
+        return lambda: _sample_vram_nvidia_smi(nvidia_smi_path)
+
+    rocm_smi_path = shutil.which("rocm-smi")
+    if rocm_smi_path:
+        return lambda: _sample_vram_rocm_smi(rocm_smi_path)
+
+    return None
+
+
+class VramSampler:
+    """Polls VRAM usage on a background thread while a prompt is in flight.
+
+    Best-effort: if no supported GPU tool is available, ``start``/``stop`` are
+    safe no-ops and ``stop`` reports ``(None, None)``. Pass a custom
+    ``sample_fn`` (returning MB used, or None) to override auto-detection,
+    primarily for tests.
+    """
+
+    def __init__(
+        self,
+        sample_fn: Callable[[], float | None] | None = None,
+        interval_seconds: float = VRAM_SAMPLE_INTERVAL_SECONDS,
+    ) -> None:
+        self._sample_fn = sample_fn if sample_fn is not None else detect_vram_sample_fn()
+        self._interval_seconds = interval_seconds
+        self._samples: list[float] = []
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def available(self) -> bool:
+        return self._sample_fn is not None
+
+    def start(self) -> None:
+        if not self.available:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        assert self._sample_fn is not None
+        while not self._stop_event.is_set():
+            value = self._sample_fn()
+            if value is not None:
+                self._samples.append(value)
+            self._stop_event.wait(self._interval_seconds)
+
+    def stop(self) -> tuple[float | None, float | None]:
+        if self._thread is not None:
+            self._stop_event.set()
+            self._thread.join(timeout=2)
+        if not self._samples:
+            return None, None
+        return max(self._samples), statistics.mean(self._samples)
 
 
 def estimate_token_count(text: str) -> int:
     """Estimate token count via whitespace chunks.
 
     This is a fast approximation for cross-model comparison only and will not
-    match exact tokenizer counts for subword/tokenizer-specific schemes.  Output
-    rows record this as ``estimated_tokens`` to make the approximation explicit.
+    match exact tokenizer counts for subword/tokenizer-specific schemes. Used
+    as a fallback when the backend doesn't report an exact completion token
+    count; output rows record which source was used via ``output_token_source``
+    (``"api"`` or ``"estimated"``).
     """
 
     return max(1, len(re.findall(r"\S+", text)))
@@ -130,7 +242,7 @@ def run_prompt_http(
     seed: int | None,
     max_tokens: int | None,
     timeout_seconds: int,
-) -> tuple[str, float, float]:
+) -> tuple[str, float, float, int | None]:
     """Run a prompt via an OpenAI-compatible /v1/chat/completions endpoint.
 
     Unlike the subprocess runner, all parameters in this payload are provably
@@ -141,6 +253,10 @@ def run_prompt_http(
     response time.  Both ``ttft_seconds`` and ``total_seconds`` in the returned
     tuple reflect the full round-trip; ``decode_tokens_per_second`` will equal
     ``tokens_per_second`` for rows produced by this runner.
+
+    The fourth return value is the API-reported completion token count from
+    the response's ``usage.completion_tokens`` field, or None if the backend
+    didn't report one (callers should fall back to ``estimate_token_count``).
     """
     payload: dict[str, Any] = {
         "model": model_id,
@@ -167,11 +283,14 @@ def run_prompt_http(
 
     result = json.loads(body)
     generated_output: str = result["choices"][0]["message"]["content"]
+    usage = result.get("usage") or {}
+    completion_tokens = usage.get("completion_tokens")
+    api_token_count = int(completion_tokens) if completion_tokens is not None else None
 
     total_seconds = max(MIN_DURATION_SECONDS, end - start)
     # Non-streaming: first-token latency is indistinguishable from total time.
     ttft_seconds = total_seconds
-    return generated_output, ttft_seconds, total_seconds
+    return generated_output, ttft_seconds, total_seconds, api_token_count
 
 
 def evaluate_with_aislop(
@@ -273,30 +392,47 @@ def aggregate_trials(
 def benchmark_case(
     config: BenchmarkConfig, case: BenchmarkCase, trial_index: int = 0
 ) -> dict[str, Any]:
-    if config.runner.type == "http":
-        generated_output, ttft_seconds, total_seconds = run_prompt_http(
-            url=config.runner.url,
-            model_id=config.model.id,
-            prompt=case.prompt,
-            parameters=config.model.parameters,
-            seed=config.model.seed,
-            max_tokens=config.model.max_tokens,
-            timeout_seconds=config.runner.timeout_seconds,
-        )
-    else:
-        generated_output, ttft_seconds, total_seconds = run_prompt(
-            command=config.runner.command,
-            prompt=case.prompt,
-            timeout_seconds=config.runner.timeout_seconds,
-        )
+    vram_sampler = VramSampler()
+    vram_sampler.start()
+    try:
+        if config.runner.type == "http":
+            generated_output, ttft_seconds, total_seconds, api_token_count = run_prompt_http(
+                url=config.runner.url,
+                model_id=config.model.id,
+                prompt=case.prompt,
+                parameters=config.model.parameters,
+                seed=config.model.seed,
+                max_tokens=config.model.max_tokens,
+                timeout_seconds=config.runner.timeout_seconds,
+            )
+        else:
+            generated_output, ttft_seconds, total_seconds = run_prompt(
+                command=config.runner.command,
+                prompt=case.prompt,
+                timeout_seconds=config.runner.timeout_seconds,
+            )
+            api_token_count = None
+    finally:
+        vram_used_mb_peak, vram_used_mb_avg = vram_sampler.stop()
 
     quality_scores = evaluate_with_aislop(
         command=config.aislop.command,
         generated_output=generated_output,
         timeout_seconds=config.aislop.timeout_seconds,
     )
-    estimated_tokens = estimate_token_count(generated_output)
-    tps = estimated_tokens / max(total_seconds, MIN_DURATION_SECONDS)
+
+    # Prefer the backend's own reported completion token count (e.g. an
+    # OpenAI-compatible API's usage.completion_tokens) over the whitespace
+    # estimate when it's available — it's an exact tokenizer count rather than
+    # an approximation.
+    if api_token_count is not None:
+        output_tokens = api_token_count
+        output_token_source = "api"
+    else:
+        output_tokens = estimate_token_count(generated_output)
+        output_token_source = "estimated"
+
+    tps = output_tokens / max(total_seconds, MIN_DURATION_SECONDS)
 
     # decode_tokens_per_second excludes prefill (TTFT) from the denominator,
     # giving a decode-phase-only throughput figure.  For HTTP non-streaming
@@ -304,7 +440,7 @@ def benchmark_case(
     # those rows carry None to avoid misleading values.
     decode_time = total_seconds - ttft_seconds
     decode_tps: float | None = (
-        estimated_tokens / max(decode_time, MIN_DURATION_SECONDS)
+        output_tokens / max(decode_time, MIN_DURATION_SECONDS)
         if decode_time > MIN_DURATION_SECONDS
         else None
     )
@@ -324,6 +460,10 @@ def benchmark_case(
         "hardware_vram_gb": config.model.hardware.vram_gb,
         "hardware_cpu": config.model.hardware.cpu,
         "hardware_os": config.model.hardware.os,
+        # Measured VRAM usage sampled from nvidia-smi/rocm-smi while the prompt
+        # was in flight; None when neither tool is available on PATH.
+        "vram_used_mb_peak": vram_used_mb_peak,
+        "vram_used_mb_avg": vram_used_mb_avg,
         # Model identity
         "model_id": config.model.id,
         "model_quantization": config.model.quantization,
@@ -342,7 +482,8 @@ def benchmark_case(
         "total_seconds": total_seconds,
         # TPS: tokens_per_second uses total_seconds (includes prefill/TTFT).
         # decode_tokens_per_second uses decode time only; None when indistinguishable.
-        "estimated_tokens": estimated_tokens,
+        "output_tokens": output_tokens,
+        "output_token_source": output_token_source,
         "tokens_per_second": tps,
         "decode_tokens_per_second": decode_tps,
     }

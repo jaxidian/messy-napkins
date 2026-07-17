@@ -30,6 +30,8 @@ messy-napkins/
 - **Two runner modes**: subprocess (for any local CLI wrapper) and HTTP (OpenAI-compatible `/v1/chat/completions` — parameters are the actual request payload, not just metadata).
 - **Rich config schema**: engine name/version/accelerator (separate from hardware accelerator), hardware identity (GPU, VRAM, CPU, OS), quantization, parameter count, seed, max tokens.
 - **Telemetry capture**: TTFT, total duration, `tokens_per_second` (total time), and `decode_tokens_per_second` (decode phase only, excluding prefill).
+- **Exact-when-possible token counts**: `output_tokens` uses the backend's own reported completion token count (`output_token_source: "api"`) when available (HTTP runner), falling back to a whitespace-based estimate (`output_token_source: "estimated"`) otherwise.
+- **VRAM telemetry**: `vram_used_mb_peak`/`vram_used_mb_avg` are sampled from `nvidia-smi`/`rocm-smi` on a background thread while each prompt is in flight; both are `null` when neither tool is found on PATH.
 - **Multi-dimensional quality scoring**: `quality_scores` is a `dict[str, float]` so `aislop` (or any rubric) can return sub-scores (correctness, style, hallucination, …) alongside a single total.
 - **Structured result logging** to JSON Lines (`.jsonl`) — one row per trial plus one aggregate row per case when `trials > 1`.
 
@@ -114,6 +116,8 @@ This will:
 ### Output
 
 - `output.path`: JSONL file destination for benchmark records.
+- `output_tokens` / `output_token_source`: token count for the generated response, and whether it came from the backend's own `usage.completion_tokens` (`"api"`) or a whitespace-based fallback estimate (`"estimated"`).
+- `vram_used_mb_peak` / `vram_used_mb_avg`: peak/average VRAM usage (MB) sampled via `nvidia-smi` or `rocm-smi` while the prompt was running; `null` if neither tool is available on the host.
 
 ## Tests
 
