@@ -53,6 +53,10 @@ This will:
 3. Send generated output to the configured `aislop` command for deterministic quality scoring.
 4. Append each benchmark result as one JSON object per line in `logs/benchmark-results.jsonl`.
 
+> The commands in `configs/example-benchmark.json` are intentionally stubbed so
+> the scaffold runs anywhere. Replace them with your real local model inference
+> command and actual `aislop` invocation for production benchmarking.
+
 ## Configuration Notes
 
 - `model.backend`: hardware backend label (e.g., `rocm`, `vulkan`, `cuda`, `metal`).

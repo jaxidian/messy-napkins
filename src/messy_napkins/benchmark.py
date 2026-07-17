@@ -12,28 +12,51 @@ from .config import BenchmarkCase, BenchmarkConfig
 
 
 def estimate_token_count(text: str) -> int:
+    """Estimate token count via whitespace chunks.
+
+    This is a fast approximation for cross-model comparison only and will not
+    match exact tokenizer counts for subword/tokenizer-specific schemes.
+    """
+
     return max(1, len(re.findall(r"\S+", text)))
 
 
 def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[str, float, float]:
     start = time.perf_counter()
-    completed = subprocess.run(
-        [*command, prompt],
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds,
-        check=False,
-    )
-    end = time.perf_counter()
+    with subprocess.Popen(
+        [*command, prompt], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ) as process:
+        stdout_chunks: list[str] = []
+        first_output_at: float | None = None
+        while True:
+            if time.perf_counter() - start > timeout_seconds:
+                process.kill()
+                raise RuntimeError(f"Prompt command timed out after {timeout_seconds} seconds.")
 
-    if completed.returncode != 0:
+            line = process.stdout.readline() if process.stdout else ""
+            if line:
+                stdout_chunks.append(line)
+                if first_output_at is None and line.strip():
+                    first_output_at = time.perf_counter()
+                continue
+
+            if process.poll() is not None:
+                break
+
+            time.sleep(0.01)
+
+        stderr_output = process.stderr.read() if process.stderr else ""
+        return_code = process.wait()
+        end = time.perf_counter()
+
+    if return_code != 0:
         raise RuntimeError(
-            f"Prompt command failed with exit code {completed.returncode}: {completed.stderr.strip()}"
+            f"Prompt command failed with exit code {return_code}: {stderr_output.strip()}"
         )
 
     total_seconds = max(0.0001, end - start)
-    ttft_seconds = total_seconds
-    return completed.stdout.strip(), ttft_seconds, total_seconds
+    ttft_seconds = total_seconds if first_output_at is None else max(0.0001, first_output_at - start)
+    return "".join(stdout_chunks).strip(), ttft_seconds, total_seconds
 
 
 def evaluate_with_aislop(command: list[str], generated_output: str, timeout_seconds: int) -> float:

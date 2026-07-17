@@ -9,6 +9,20 @@ from pathlib import Path
 from messy_napkins.benchmark import evaluate_with_aislop, run_benchmark
 from messy_napkins.config import BenchmarkConfig
 
+RUNNER_COMMAND = [
+    sys.executable,
+    "-c",
+    "import sys; print('generated:' + sys.argv[1])",
+]
+
+AISLOP_JSON_SCORE_COMMAND = [
+    sys.executable,
+    "-c",
+    "import json,sys; text=sys.stdin.read(); print(json.dumps({'score': len(text)}))",
+]
+
+AISLOP_FLOAT_SCORE_COMMAND = [sys.executable, "-c", "print('0.42')"]
+
 
 class BenchmarkRunnerTests(unittest.TestCase):
     def test_run_benchmark_writes_jsonl_and_returns_metrics(self) -> None:
@@ -24,19 +38,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
                         "parameters": {"temperature": 0.1},
                     },
                     "runner": {
-                        "command": [
-                            sys.executable,
-                            "-c",
-                            "import sys; print('generated:' + sys.argv[1])",
-                        ],
+                        "command": RUNNER_COMMAND,
                         "timeout_seconds": 10,
                     },
                     "aislop": {
-                        "command": [
-                            sys.executable,
-                            "-c",
-                            "import json,sys; text=sys.stdin.read(); print(json.dumps({'score': len(text)}))",
-                        ],
+                        "command": AISLOP_JSON_SCORE_COMMAND,
                         "timeout_seconds": 10,
                     },
                     "output": {"path": str(output_path)},
@@ -67,7 +73,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
 
     def test_evaluate_with_aislop_accepts_float_stdout(self) -> None:
         score = evaluate_with_aislop(
-            command=[sys.executable, "-c", "print('0.42')"],
+            command=AISLOP_FLOAT_SCORE_COMMAND,
             generated_output="ignored",
             timeout_seconds=10,
         )
