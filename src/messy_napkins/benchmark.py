@@ -10,6 +10,9 @@ from typing import Any
 
 from .config import BenchmarkCase, BenchmarkConfig
 
+MIN_DURATION_SECONDS = 0.0001
+POLL_INTERVAL_SECONDS = 0.01
+
 
 def estimate_token_count(text: str) -> int:
     """Estimate token count via whitespace chunks.
@@ -33,7 +36,7 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
                 process.kill()
                 raise RuntimeError(f"Prompt command timed out after {timeout_seconds} seconds.")
 
-            line = process.stdout.readline() if process.stdout else ""
+            line = process.stdout.readline()
             if line:
                 stdout_chunks.append(line)
                 if first_output_at is None and line.strip():
@@ -43,9 +46,9 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
             if process.poll() is not None:
                 break
 
-            time.sleep(0.01)
+            time.sleep(POLL_INTERVAL_SECONDS)
 
-        stderr_output = process.stderr.read() if process.stderr else ""
+        stderr_output = process.stderr.read()
         return_code = process.wait()
         end = time.perf_counter()
 
@@ -54,8 +57,12 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
             f"Prompt command failed with exit code {return_code}: {stderr_output.strip()}"
         )
 
-    total_seconds = max(0.0001, end - start)
-    ttft_seconds = total_seconds if first_output_at is None else max(0.0001, first_output_at - start)
+    total_seconds = max(MIN_DURATION_SECONDS, end - start)
+    ttft_seconds = (
+        total_seconds
+        if first_output_at is None
+        else max(MIN_DURATION_SECONDS, first_output_at - start)
+    )
     return "".join(stdout_chunks).strip(), ttft_seconds, total_seconds
 
 
