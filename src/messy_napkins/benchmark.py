@@ -13,6 +13,7 @@ from .config import BenchmarkCase, BenchmarkConfig
 
 MIN_DURATION_SECONDS = 0.0001
 CHUNK_SIZE_BYTES = 4096
+STREAM_JOIN_TIMEOUT_SECONDS = 1.0
 
 
 def estimate_token_count(text: str) -> int:
@@ -66,17 +67,24 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
         stdout_thread.start()
         stderr_thread.start()
 
+        timeout_exc: subprocess.TimeoutExpired | None = None
         try:
             return_code = process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
+            timeout_exc = exc
             process.kill()
             process.wait()
+        finally:
+            stdout_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+            stderr_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            raise RuntimeError("Prompt command output stream reader did not terminate cleanly.")
+
+        if timeout_exc is not None:
             raise RuntimeError(
                 f"Prompt command timed out after {timeout_seconds} seconds."
-            ) from exc
-        finally:
-            stdout_thread.join()
-            stderr_thread.join()
+            ) from timeout_exc
 
         end = time.perf_counter()
 
