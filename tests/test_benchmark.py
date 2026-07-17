@@ -6,7 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from messy_napkins.benchmark import estimate_token_count, evaluate_with_aislop, run_benchmark
+from messy_napkins.benchmark import (
+    estimate_token_count,
+    evaluate_with_aislop,
+    run_benchmark,
+    run_prompt,
+)
 from messy_napkins.config import BenchmarkConfig
 
 RUNNER_COMMAND = [
@@ -22,6 +27,7 @@ AISLOP_JSON_SCORE_COMMAND = [
 ]
 
 AISLOP_FLOAT_SCORE_COMMAND = [sys.executable, "-c", "print('0.42')"]
+SLOW_RUNNER_COMMAND = [sys.executable, "-c", "import time; time.sleep(1); print('too-late')"]
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
@@ -85,6 +91,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(3, estimate_token_count("one two three"))
         self.assertEqual(2, estimate_token_count("word1  \n\tword2"))
         self.assertEqual(2, estimate_token_count("🚀-launch\nnaïve,café"))
+
+    def test_run_prompt_timeout_raises(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            run_prompt(command=SLOW_RUNNER_COMMAND, prompt="ignored", timeout_seconds=0.01)
 
 
 if __name__ == "__main__":
