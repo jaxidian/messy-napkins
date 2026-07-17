@@ -30,6 +30,9 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
     with subprocess.Popen(
         [*command, prompt], stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
+        if process.stdout is None or process.stderr is None:
+            raise RuntimeError("Prompt command must expose stdout and stderr pipes for telemetry.")
+
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
         first_output_at: float | None = None
