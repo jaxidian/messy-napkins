@@ -1,0 +1,48 @@
+{
+  "name": "quick-local-baseline",
+  "model": {
+    "id": "example-model-q4",
+    "backend": "vulkan",
+    "context_size": 32768,
+    "parameters": {
+      "temperature": 0.2,
+      "top_p": 0.95
+    }
+  },
+  "runner": {
+    "command": [
+      "python",
+      "-c",
+      "import sys; print('stub output for: ' + sys.argv[1])"
+    ],
+    "timeout_seconds": 30
+  },
+  "aislop": {
+    "command": [
+      "python",
+      "-c",
+      "import json,sys; payload=sys.stdin.read(); print(json.dumps({'score': len(payload) / 10}))"
+    ],
+    "timeout_seconds": 30
+  },
+  "output": {
+    "path": "logs/benchmark-results.jsonl"
+  },
+  "cases": [
+    {
+      "id": "code-gen-hello-world",
+      "task": "code_gen",
+      "prompt": "Write a Python hello world function."
+    },
+    {
+      "id": "docs-api-summary",
+      "task": "docs",
+      "prompt": "Document an API endpoint that creates a user."
+    },
+    {
+      "id": "prompt-following",
+      "task": "system_prompt_following",
+      "prompt": "Respond with exactly three bullet points about observability."
+    }
+  ]
+}
