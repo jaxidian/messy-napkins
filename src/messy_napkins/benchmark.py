@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import selectors
 import subprocess
@@ -32,6 +33,8 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
     ) as process:
         if process.stdout is None or process.stderr is None:
             raise RuntimeError("Prompt command must expose stdout and stderr pipes for telemetry.")
+        os.set_blocking(process.stdout.fileno(), False)
+        os.set_blocking(process.stderr.fileno(), False)
 
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
@@ -49,14 +52,18 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
 
                 events = selector.select(timeout=POLL_INTERVAL_SECONDS)
                 for key, _ in events:
-                    chunk = key.fileobj.read(4096)
+                    try:
+                        chunk = key.fileobj.read(4096)
+                    except BlockingIOError:
+                        continue
+
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue
 
                     if key.data == "stdout":
                         stdout_chunks.append(chunk)
-                        if first_output_at is None and chunk.strip():
+                        if first_output_at is None and not chunk.isspace():
                             first_output_at = time.perf_counter()
                     else:
                         stderr_chunks.append(chunk)
@@ -119,7 +126,7 @@ def benchmark_case(config: BenchmarkConfig, case: BenchmarkCase) -> dict[str, An
         timeout_seconds=config.aislop.timeout_seconds,
     )
     generated_tokens = estimate_token_count(generated_output)
-    tps = generated_tokens / total_seconds
+    tps = generated_tokens / max(total_seconds, MIN_DURATION_SECONDS)
 
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),

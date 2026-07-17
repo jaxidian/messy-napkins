@@ -84,6 +84,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(1, estimate_token_count("   \n\t"))
         self.assertEqual(3, estimate_token_count("one two three"))
         self.assertEqual(2, estimate_token_count("word1  \n\tword2"))
+        self.assertEqual(2, estimate_token_count("🚀-launch\nnaïve,café"))
 
 
 if __name__ == "__main__":

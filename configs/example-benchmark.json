@@ -11,7 +11,7 @@
   },
   "runner": {
     "command": [
-      "python",
+      "python3",
       "-c",
       "import sys; print('stub output for: ' + sys.argv[1])"
     ],
@@ -19,7 +19,7 @@
   },
   "aislop": {
     "command": [
-      "python",
+      "python3",
       "-c",
       "import json,sys; text=sys.stdin.read(); print(json.dumps({'score': len(text) / 10}))"
     ],
