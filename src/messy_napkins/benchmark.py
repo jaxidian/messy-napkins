@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import selectors
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -27,32 +28,43 @@ def estimate_token_count(text: str) -> int:
 def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[str, float, float]:
     start = time.perf_counter()
     with subprocess.Popen(
-        [*command, prompt], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        [*command, prompt], stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
-        stdout_chunks: list[str] = []
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
         first_output_at: float | None = None
-        while True:
-            if time.perf_counter() - start > timeout_seconds:
-                process.kill()
-                raise RuntimeError(f"Prompt command timed out after {timeout_seconds} seconds.")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
 
-            line = process.stdout.readline()
-            if line:
-                stdout_chunks.append(line)
-                if first_output_at is None and line.strip():
-                    first_output_at = time.perf_counter()
-                continue
+        try:
+            while selector.get_map():
+                if time.perf_counter() - start > timeout_seconds:
+                    process.kill()
+                    process.wait()
+                    raise RuntimeError(f"Prompt command timed out after {timeout_seconds} seconds.")
 
-            if process.poll() is not None:
-                break
+                events = selector.select(timeout=POLL_INTERVAL_SECONDS)
+                for key, _ in events:
+                    chunk = key.fileobj.read1(4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
 
-            time.sleep(POLL_INTERVAL_SECONDS)
+                    if key.data == "stdout":
+                        stdout_chunks.append(chunk)
+                        if first_output_at is None and chunk.strip():
+                            first_output_at = time.perf_counter()
+                    else:
+                        stderr_chunks.append(chunk)
+        finally:
+            selector.close()
 
-        stderr_output = process.stderr.read()
         return_code = process.wait()
         end = time.perf_counter()
 
     if return_code != 0:
+        stderr_output = b"".join(stderr_chunks).decode("utf-8", errors="replace")
         raise RuntimeError(
             f"Prompt command failed with exit code {return_code}: {stderr_output.strip()}"
         )
@@ -63,7 +75,8 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
         if first_output_at is None
         else max(MIN_DURATION_SECONDS, first_output_at - start)
     )
-    return "".join(stdout_chunks).strip(), ttft_seconds, total_seconds
+    output = b"".join(stdout_chunks).decode("utf-8", errors="replace").strip()
+    return output, ttft_seconds, total_seconds
 
 
 def evaluate_with_aislop(command: list[str], generated_output: str, timeout_seconds: int) -> float:

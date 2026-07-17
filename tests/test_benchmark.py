@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from messy_napkins.benchmark import evaluate_with_aislop, run_benchmark
+from messy_napkins.benchmark import estimate_token_count, evaluate_with_aislop, run_benchmark
 from messy_napkins.config import BenchmarkConfig
 
 RUNNER_COMMAND = [
@@ -25,7 +25,7 @@ AISLOP_FLOAT_SCORE_COMMAND = [sys.executable, "-c", "print('0.42')"]
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
-    def test_run_benchmark_writes_jsonl_and_returns_metrics(self) -> None:
+    def test_run_benchmark_full_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "logs" / "results.jsonl"
             config = BenchmarkConfig.from_dict(
@@ -78,6 +78,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
             timeout_seconds=10,
         )
         self.assertAlmostEqual(0.42, score)
+
+    def test_estimate_token_count_edge_cases(self) -> None:
+        self.assertEqual(1, estimate_token_count(""))
+        self.assertEqual(1, estimate_token_count("   \n\t"))
+        self.assertEqual(3, estimate_token_count("one two three"))
 
 
 if __name__ == "__main__":
