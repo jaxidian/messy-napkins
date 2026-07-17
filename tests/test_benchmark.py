@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import http.server
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from messy_napkins.benchmark import (
+    VramSampler,
     aggregate_trials,
     estimate_token_count,
     evaluate_with_aislop,
     run_benchmark,
     run_prompt,
+    run_prompt_http,
 )
 from messy_napkins.config import BenchmarkConfig
 
@@ -36,6 +42,35 @@ AISLOP_MULTI_SCORE_COMMAND = [
 AISLOP_FLOAT_SCORE_COMMAND = [sys.executable, "-c", "print('0.42')"]
 FAST_RUNNER_COMMAND = [sys.executable, "-c", "import sys; print('done:' + sys.argv[1])"]
 SLOW_RUNNER_COMMAND = [sys.executable, "-c", "import time; time.sleep(2); print('too-late')"]
+
+
+@contextmanager
+def _fake_openai_server(response_json: dict):
+    """Serve a canned OpenAI-compatible chat completion response on localhost."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 (required override name)
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            body = json.dumps(response_json).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=2)
+        server.server_close()
 
 
 def _base_config(output_path: str, *, trials: int = 1) -> dict:
@@ -81,7 +116,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual("trial", result["row_type"])
             self.assertEqual(0, result["trial_index"])
             self.assertGreater(result["tokens_per_second"], 0)
-            self.assertGreater(result["estimated_tokens"], 0)
+            self.assertGreater(result["output_tokens"], 0)
+            self.assertEqual("estimated", result["output_token_source"])
+            self.assertIn("vram_used_mb_peak", result)
+            self.assertIn("vram_used_mb_avg", result)
             self.assertIsInstance(result["quality_scores"], dict)
             self.assertGreaterEqual(result["quality_scores"]["total"], 1)
             self.assertTrue(output_path.exists())
@@ -258,6 +296,81 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual("done:ok", output)
         self.assertGreater(total_seconds, 0)
         self.assertGreaterEqual(total_seconds, ttft_seconds)
+
+    def test_run_prompt_http_uses_api_reported_token_count(self) -> None:
+        response = {
+            "choices": [{"message": {"content": "hello world"}}],
+            "usage": {"completion_tokens": 7},
+        }
+        with _fake_openai_server(response) as url:
+            output, ttft_seconds, total_seconds, api_token_count = run_prompt_http(
+                url=url,
+                model_id="test-model",
+                prompt="hi",
+                parameters={},
+                seed=None,
+                max_tokens=None,
+                timeout_seconds=5,
+            )
+        self.assertEqual("hello world", output)
+        self.assertEqual(7, api_token_count)
+        self.assertGreaterEqual(total_seconds, 0)
+        self.assertEqual(ttft_seconds, total_seconds)
+
+    def test_run_prompt_http_falls_back_when_usage_missing(self) -> None:
+        response = {"choices": [{"message": {"content": "no usage field here"}}]}
+        with _fake_openai_server(response) as url:
+            _, _, _, api_token_count = run_prompt_http(
+                url=url,
+                model_id="test-model",
+                prompt="hi",
+                parameters={},
+                seed=None,
+                max_tokens=None,
+                timeout_seconds=5,
+            )
+        self.assertIsNone(api_token_count)
+
+    def test_benchmark_case_http_runner_uses_api_token_source(self) -> None:
+        response = {
+            "choices": [{"message": {"content": "hello from the api"}}],
+            "usage": {"completion_tokens": 4},
+        }
+        with _fake_openai_server(response) as url, tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "results.jsonl"
+            config = BenchmarkConfig.from_dict(
+                {
+                    **_base_config(str(output_path)),
+                    "runner": {"type": "http", "url": url, "timeout_seconds": 10},
+                }
+            )
+            results = run_benchmark(config)
+            row = results[0]
+            self.assertEqual("api", row["output_token_source"])
+            self.assertEqual(4, row["output_tokens"])
+
+    def test_vram_sampler_computes_peak_and_average(self) -> None:
+        values = iter([100.0, 200.0, 150.0, 150.0, 150.0, 150.0])
+        sampler = VramSampler(sample_fn=lambda: next(values, 150.0), interval_seconds=0.01)
+        self.assertTrue(sampler.available)
+        sampler.start()
+        time.sleep(0.05)
+        peak, avg = sampler.stop()
+        self.assertIsNotNone(peak)
+        self.assertIsNotNone(avg)
+        assert peak is not None and avg is not None
+        self.assertGreaterEqual(peak, avg)
+        self.assertEqual(200.0, peak)
+
+    def test_vram_sampler_unavailable_reports_none(self) -> None:
+        sampler = VramSampler(sample_fn=None, interval_seconds=0.01)
+        # Force "unavailable" regardless of what's actually on the test host's PATH.
+        sampler._sample_fn = None  # noqa: SLF001 (test-only override)
+        self.assertFalse(sampler.available)
+        sampler.start()
+        peak, avg = sampler.stop()
+        self.assertIsNone(peak)
+        self.assertIsNone(avg)
 
 
 if __name__ == "__main__":
