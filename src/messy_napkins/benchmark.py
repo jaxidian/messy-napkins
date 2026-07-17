@@ -63,7 +63,7 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
 
                     if key.data == "stdout":
                         stdout_chunks.append(chunk)
-                        if first_output_at is None and not chunk.isspace():
+                        if first_output_at is None and chunk.strip():
                             first_output_at = time.perf_counter()
                     else:
                         stderr_chunks.append(chunk)
