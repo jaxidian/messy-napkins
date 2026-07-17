@@ -244,7 +244,8 @@ def aggregate_trials(
 
     ttft_values = [r["ttft_seconds"] for r in successful]
     tps_values = [r["tokens_per_second"] for r in successful]
-    decode_tps_values = [r["decode_tokens_per_second"] for r in successful if r["decode_tokens_per_second"] is not None]
+    decode_tps_candidates = [r["decode_tokens_per_second"] for r in successful]
+    decode_tps_values = [v for v in decode_tps_candidates if v is not None]
 
     agg["mean_ttft_seconds"], agg["stddev_ttft_seconds"] = _mean_stdev(ttft_values)
     agg["mean_tokens_per_second"], agg["stddev_tokens_per_second"] = _mean_stdev(tps_values)

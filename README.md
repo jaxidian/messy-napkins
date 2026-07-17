@@ -109,7 +109,7 @@ This will:
 
 | Field | Description |
 |---|---|
-| `trials` | Number of repeated runs per case (default `1`); set to `≥ 3` to measure reliability |
+| `trials` | Number of repeated runs per case (default `1`); set to `>= 3` to measure reliability |
 
 ### Output
 
