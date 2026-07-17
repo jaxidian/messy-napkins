@@ -88,10 +88,20 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
         if stderr_thread.is_alive():
             alive_streams.append("stderr")
         if alive_streams:
-            raise RuntimeError(
-                "Prompt command stream reader threads did not terminate within "
-                f"{STREAM_JOIN_TIMEOUT_SECONDS} seconds ({', '.join(alive_streams)})."
-            )
+            process.stdout.close()
+            process.stderr.close()
+            stdout_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+            stderr_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+            alive_streams = []
+            if stdout_thread.is_alive():
+                alive_streams.append("stdout")
+            if stderr_thread.is_alive():
+                alive_streams.append("stderr")
+            if alive_streams:
+                raise RuntimeError(
+                    "Prompt command stream reader threads did not terminate within "
+                    f"{STREAM_JOIN_TIMEOUT_SECONDS} second(s) ({', '.join(alive_streams)})."
+                )
 
         if timeout_exc is not None:
             raise RuntimeError(
