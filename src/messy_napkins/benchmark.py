@@ -54,11 +54,21 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
 
         def maybe_record_first_output(chunk: bytes) -> None:
             nonlocal first_output_at
-            if not chunk.strip():
+            if not chunk or chunk.isspace():
                 return
             with first_output_lock:
                 if first_output_at is None:
                     first_output_at = time.perf_counter()
+
+        def join_reader_threads() -> list[str]:
+            stdout_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+            stderr_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
+            alive_streams = []
+            if stdout_thread.is_alive():
+                alive_streams.append("stdout")
+            if stderr_thread.is_alive():
+                alive_streams.append("stderr")
+            return alive_streams
 
         stdout_thread = threading.Thread(
             target=read_stream,
@@ -79,29 +89,12 @@ def run_prompt(command: list[str], prompt: str, timeout_seconds: int) -> tuple[s
             process.kill()
             process.wait()
         finally:
-            stdout_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
-            stderr_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
-
-        alive_streams = []
-        if stdout_thread.is_alive():
-            alive_streams.append("stdout")
-        if stderr_thread.is_alive():
-            alive_streams.append("stderr")
+            alive_streams = join_reader_threads()
         if alive_streams:
-            process.stdout.close()
-            process.stderr.close()
-            stdout_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
-            stderr_thread.join(timeout=STREAM_JOIN_TIMEOUT_SECONDS)
-            alive_streams = []
-            if stdout_thread.is_alive():
-                alive_streams.append("stdout")
-            if stderr_thread.is_alive():
-                alive_streams.append("stderr")
-            if alive_streams:
-                raise RuntimeError(
-                    "Prompt command stream reader threads did not terminate within "
-                    f"{STREAM_JOIN_TIMEOUT_SECONDS} second(s) ({', '.join(alive_streams)})."
-                )
+            raise RuntimeError(
+                "Prompt command stream reader threads did not terminate within "
+                f"{STREAM_JOIN_TIMEOUT_SECONDS} second(s) ({', '.join(alive_streams)})."
+            )
 
         if timeout_exc is not None:
             raise RuntimeError(
