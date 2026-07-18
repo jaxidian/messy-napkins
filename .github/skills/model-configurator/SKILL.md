@@ -1,6 +1,6 @@
 ---
 name: model-configurator
-description: 'Manage messy-napkins hosting configs: probe a hosted LLM (Lemonade, Ollama, OpenAI-compatible, etc.) to generate a targeted benchmark configuration, or correct an existing config''s deeply technical fields (context size, engine startup flags, hardware, sampler defaults). Use when a user provides hosting commands, connection details (URL/IP/domain/API key), and freeform notes and wants a config produced or fixed. Probes live metadata and boundary limits to fill in as much as possible, then asks the user only for what cannot be discovered automatically. Produces/updates a configs/local/*.json plus a corresponding dated markdown findings entry — this skill writes files. This is the only role that should change configs/ or docs/hosting/ content; benchmark runners should be pointed here instead of editing configs themselves.'
+description: 'Manage messy-napkins hosting configs: probe a hosted LLM (Lemonade, Ollama, OpenAI-compatible, etc.) to generate a targeted benchmark configuration, or correct an existing config''s deeply technical fields (context size, engine startup flags, hardware, sampler defaults). Use when a user provides hosting commands, connection details (URL/IP/domain/API key), and freeform notes and wants a config produced or fixed. Probes live metadata and boundary limits to fill in as much as possible, then asks the user only for what cannot be discovered automatically. Always produces/updates a configs/local/*.json paired with a configs/local/*.md findings file married to that exact config (commands, live evidence, resulting values); only touches the portable docs/hosting/ knowledge base when something genuinely reusable was learned — this skill writes files. This is the only role that should change configs/ or docs/hosting/ content; benchmark runners should be pointed here instead of editing configs themselves.'
 ---
 
 # Model Configurator
@@ -56,18 +56,32 @@ that isn't computable from what's exposed).
    the verified `context_size`, `engine.startup_flags`, hardware,
    quantization, and source/revision where discoverable. If correcting an
    existing config, edit it in place rather than creating a duplicate.
-7. **Produce the markdown findings**: if a profile for this model/engine
-   already exists under `docs/hosting/`, append a dated "Verification log"
-   entry there. Otherwise create a new profile following the evidence-label
-   conventions in [docs/hosting/README.md](../../../docs/hosting/README.md)
-   (Verified / Observed / Recommended / Unknown).
+7. **Produce the paired findings file**: always write or update
+   `configs/local/<name>.md` — same base name as the config, living right
+   next to it. This file is married 1:1 to that exact config instance and is
+   never portable. Include, dated: the exact hosting commands/env vars
+   (verbatim), the live metadata snapshot, the boundary-probe evidence, and
+   the resulting field values with reasoning. This is the primary
+   deliverable requested by the user — do not skip it or substitute a
+   `docs/hosting/` entry for it.
+8. **Optionally update the portable knowledge base**: only when something
+   genuinely reusable/general was learned (a new fact about the model or
+   engine itself, not tied to this one host/run) — append a note to
+   `docs/hosting/<model>.md` or `docs/hosting/<engine>.md` following the
+   evidence-label conventions in
+   [docs/hosting/README.md](../../../docs/hosting/README.md) (Verified /
+   Observed / Recommended / Unknown). Keep it general: do not paste the
+   verbatim commands or session specifics that belong in the paired file
+   from step 7.
 
 ## Output Contract
 
-This skill **writes files**: a config under `configs/local/` and a markdown
-entry under `docs/hosting/` (new profile or appended log entry). Confirm the
-destination paths with the user if ambiguous. This is the only skill that
-should modify configs or `docs/hosting/` content.
+This skill **writes files**: a config under `configs/local/`, and a paired
+`configs/local/<name>.md` findings file with that exact run's commands and
+evidence — every invocation produces both. It only touches `docs/hosting/`
+when a genuinely portable fact was discovered, and never as a substitute for
+the paired file. Confirm destination paths with the user if ambiguous. This
+is the only skill that should modify configs or `docs/hosting/` content.
 
 ## Evidence Discipline
 
@@ -76,6 +90,15 @@ should modify configs or `docs/hosting/` content.
 - Distinguish requested / advertised / training / effective values explicitly.
 - Never assume env-var vs. CLI-flag precedence without a probe if both are
   set to different values at the same time.
+
+## Docs/hosting vs. paired findings file
+
+- `configs/local/<name>.md` — **married to one config instance.** Exact
+  commands, exact evidence, exact resulting values, dated. Never portable,
+  never sanitized-by-default (gitignored like the config it pairs with).
+- `docs/hosting/<model|engine>.md` — **directional/portable.** General
+  facts and recommendations that hold across hosts and runs. Update sparingly
+  and only with reusable conclusions.
 
 ## Related
 

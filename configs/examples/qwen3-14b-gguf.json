@@ -1,5 +1,5 @@
 {
-  "name": "qwen3-14b-gguf-local",
+  "name": "qwen3-14b-gguf-example",
   "model": {
     "id": "Qwen3-14B-GGUF",
     "engine": {
@@ -8,7 +8,15 @@
       "accelerator": "vulkan",
       "startup_flags": [
         "--ctx-size",
-        "40960"
+        "40960",
+        "--n-gpu-layers",
+        "-1",
+        "--cache-type-k",
+        "q4_0",
+        "--cache-type-v",
+        "q4_0",
+        "--flash-attn",
+        "--no-mmap"
       ]
     },
     "hardware": {
@@ -42,7 +50,8 @@
   },
   "runner": {
     "type": "http",
-    "url": "http://localhost:13305/v1/chat/completions",
+    "url": "http://YOUR-LEMONADE-HOST:13305/v1/chat/completions",
+    "provider": "lemonade",
     "timeout_seconds": 120
   },
   "aislop": {
