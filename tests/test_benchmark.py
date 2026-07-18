@@ -17,6 +17,7 @@ from messy_napkins.benchmark import (
     aggregate_trials,
     build_run_manifest,
     estimate_token_count,
+    evaluate_case_locally,
     evaluate_with_aislop,
     run_benchmark,
     run_prompt,
@@ -24,6 +25,7 @@ from messy_napkins.benchmark import (
     run_prompt_http_streaming,
 )
 from messy_napkins.config import BenchmarkConfig
+from messy_napkins.provider import _model_facts, _parse_llamacpp_args
 
 # ---------------------------------------------------------------------------
 # Shared test commands
@@ -198,6 +200,125 @@ def _base_config(output_path: str, *, trials: int = 1, warmup_trials: int = 0) -
 # ---------------------------------------------------------------------------
 
 class BenchmarkRunnerTests(unittest.TestCase):
+
+    def test_provider_metadata_normalizes_lemonade_model_record(self) -> None:
+        facts = _model_facts({
+            "id": "Qwen3-14B-GGUF",
+            "checkpoint": "unsloth/Qwen3-14B-GGUF:Q4_0",
+            "max_context_window": 40960,
+            "recipe": "llamacpp",
+            "recipe_options": {
+                "ctx_size": 40960,
+                "llamacpp_backend": "vulkan",
+            },
+        })
+        self.assertEqual("GGUF", facts["model_format"])
+        self.assertEqual("Q4_0", facts["quantization"])
+        self.assertEqual("14B", facts["parameter_count"])
+        self.assertEqual(40960, facts["context_size"])
+        self.assertEqual("llamacpp", facts["engine"])
+        self.assertEqual("vulkan", facts["accelerator"])
+
+    def test_provider_metadata_parses_reported_lemonade_sampler_defaults(self) -> None:
+        defaults = _parse_llamacpp_args(
+            "--temp 0.6 --top-p 0.85 --top-k 20 --min-p 0.0 --repeat-penalty 1.0"
+        )
+        self.assertEqual({
+            "temperature": 0.6,
+            "top_p": 0.85,
+            "top_k": 20,
+            "min_p": 0,
+            "repeat_penalty": 1,
+        }, defaults)
+
+    def test_run_manifest_preserves_provider_metadata_and_verification(self) -> None:
+        config = BenchmarkConfig.from_dict(_base_config("ignored.jsonl"))
+        metadata = {
+            "provider": "lemonade",
+            "status": "verified",
+            "endpoint": "http://localhost:13305/api/v1/models",
+            "raw": {"data": [{"id": "tiny-local"}]},
+            "facts": {
+                "model_id": "tiny-local",
+                "context_size": 4096,
+                "accelerator": "vulkan",
+            },
+        }
+        manifest = build_run_manifest(config, "test-run-id", metadata)
+        self.assertEqual("lemonade", manifest["provider"])
+        self.assertEqual("verified", manifest["provider_metadata_status"])
+        self.assertEqual(4096, manifest["observed_context_size"])
+        self.assertEqual("mismatch", manifest["provider_field_verification"]["context_size"])
+        self.assertEqual("mismatch", manifest["provider_field_verification"]["accelerator"])
+
+    def test_local_python_tests_execute_generated_code(self) -> None:
+        config = BenchmarkConfig.from_dict({
+            **_base_config("ignored.jsonl"),
+            "cases": [{
+                "id": "slugify",
+                "task": "code_gen",
+                "prompt": "Implement slugify(text).",
+                "evaluation": {
+                    "kind": "python_tests",
+                    "tests": [
+                        "assert slugify('Hello, World!') == 'hello-world'",
+                        "assert slugify('  two words  ') == 'two-words'",
+                    ],
+                },
+            }],
+        })
+        scores, passed, details = evaluate_case_locally(
+            config.cases[0],
+            "```python\ndef slugify(text):\n    return '-'.join(text.lower().strip(' !').split(', '))\n```",
+        )
+        self.assertEqual(0.0, scores["tests_passed"])
+        self.assertFalse(passed)
+        self.assertEqual("python_tests", details["kind"])
+
+    def test_local_json_schema_and_rubric_contracts(self) -> None:
+        schema_case = BenchmarkConfig.from_dict({
+            **_base_config("ignored.jsonl"),
+            "cases": [{
+                "id": "schema",
+                "task": "structured_output",
+                "prompt": "Return JSON.",
+                "evaluation": {
+                    "kind": "json_schema",
+                    "schema": {
+                        "type": "object",
+                        "required": ["answer", "confidence"],
+                        "properties": {
+                            "answer": {"type": "string"},
+                            "confidence": {"type": "number"},
+                        },
+                    },
+                },
+            }],
+        }).cases[0]
+        scores, passed, _ = evaluate_case_locally(
+            schema_case, '{"answer":"42","confidence":0.9}'
+        )
+        self.assertEqual(1.0, scores["schema_valid"])
+        self.assertTrue(passed)
+
+        rubric_case = BenchmarkConfig.from_dict({
+            **_base_config("ignored.jsonl"),
+            "cases": [{
+                "id": "docs",
+                "task": "docs",
+                "prompt": "Document an endpoint.",
+                "evaluation": {
+                    "kind": "rubric",
+                    "required_phrases": ["authentication", "response"],
+                    "forbidden_phrases": ["guaranteed uptime"],
+                },
+            }],
+        }).cases[0]
+        scores, passed, _ = evaluate_case_locally(
+            rubric_case, "Authentication is required. The response is JSON."
+        )
+        self.assertEqual(1.0, scores["rubric_coverage"])
+        self.assertTrue(passed)
 
     # --- Full workflow ---
 
@@ -435,7 +556,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             # whitespace_approx is also present as a diagnostic field
             self.assertIn("output_tokens_whitespace_approx", row)
             # Sampler settings are effective for HTTP
-            self.assertEqual("effective", row["sampler_settings_source"])
+            self.assertEqual("sent_not_backend_verified", row["sampler_settings_source"])
             # TTFT source is streaming_api
             self.assertEqual("streaming_api", row["ttft_source"])
 
@@ -587,7 +708,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertIn("stream", row["effective_request"])
             self.assertIn("stream_options", row["effective_request"])
             # Sampler settings are effective for HTTP runner
-            self.assertEqual("effective", row["sampler_settings_source"])
+            self.assertEqual("sent_not_backend_verified", row["sampler_settings_source"])
             # TTFT source is streaming_api for HTTP runner
             self.assertEqual("streaming_api", row["ttft_source"])
 

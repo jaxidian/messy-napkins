@@ -30,7 +30,7 @@ messy-napkins/
 - **Separate reliability definitions** — `execution_success_rate` (no crash/timeout) and `task_pass_rate` (explicit pass criteria satisfied) are tracked independently.
 - **Persisted failure rows** — a timeout or error on one trial produces a failure row (with `error_type`, `error_message`, `timed_out`, `stage`) rather than aborting the run; the benchmark always completes.
 - **TTFT provenance** — `ttft_source` records how TTFT was measured: `"streaming_api"` (HTTP runner: genuine first-token latency from SSE event stream) or `"first_chunk_approx"` (subprocess runner: first non-whitespace stdout chunk, subject to process/stdout buffering).
-- **Effective config capture** — every trial row includes `effective_command` (subprocess) or `effective_request` (HTTP) so the logged config is provably what executed. The `effective_request` is built once from a shared helper and sent verbatim, so it exactly matches the payload on the wire (including `stream_options`). A `sampler_settings_source` field records whether model parameters were `"effective"` (HTTP: provably applied) or `"unverified_metadata"` (subprocess: logged but not forwarded to the process).
+- **Effective config capture** — every trial row includes `effective_command` (subprocess) or `effective_request` (HTTP) so the logged config is provably what the client executed. The `effective_request` is built once from a shared helper and sent verbatim, so it exactly matches the payload on the wire (including `stream_options`). A `sampler_settings_source` field records `"sent_not_backend_verified"` for HTTP parameters and `"unverified_metadata"` for subprocess parameters.
 - **Source-qualified token counts and TPS** — `output_tokens` and TPS (`tokens_per_second`, `decode_tokens_per_second`) are only non-null when the backend reports token counts via `usage.completion_tokens` (HTTP runner). A separate `output_tokens_whitespace_approx` field stores the whitespace-chunk count as a diagnostic-only value; it is explicitly not used for throughput metrics because word counts are not model tokens and differ across tokenizer families. Empty output sets TPS to `null` rather than producing a misleading positive value.
 - **VRAM telemetry with baseline** — `vram_baseline_mb`, `vram_peak_mb`, `vram_peak_delta_mb`, `vram_avg_delta_mb` sampled from `nvidia-smi`/`rocm-smi`; a pre-inference baseline is captured so deltas attribute only inference memory, not pre-existing GPU load.
 - **Structured evaluation payload** — the aislop evaluator receives a full JSON payload (case ID, prompt, system prompt, generated output, expected answer, pass condition) so it can make context-aware judgments.
@@ -38,6 +38,19 @@ messy-napkins/
 - **Run manifest** — every JSONL output begins with a `row_type: "run_manifest"` row capturing run ID, config hash, git commit, Python version, platform, model/engine/hardware identity, an evaluator command hash (`aislop_command_hash`), and per-case content hashes (`case_content_hashes`) so results are self-describing and case definitions can be verified across runs.
 - **Rich provenance config schema** — engine name/version/accelerator/startup_flags (separate from hardware), hardware identity with `device_count`/`driver_version`/`runtime_version`, model artifact provenance (`source`, `revision`, `artifact_filename`, `artifact_checksum`), quantization, parameter count, seed, max_tokens, system prompt, expected answer, warmup trials. All provenance fields are optional; populate what you know.
 - **Multi-dimensional quality scores** — `quality_scores` is `dict[str, float]` so evaluators can return sub-scores (correctness, style, hallucination, …).
+- **Case-level evaluation contracts** — cases can run deterministic `python_tests`, `json_schema`, or documentation `rubric` checks in addition to the configured `aislop` score. Functional and instruction-following pass rates are therefore separate from static code quality.
+
+### Evaluation Contracts
+
+Use `evaluation.kind` to declare what a case must satisfy:
+
+| Kind | Purpose | Result fields |
+|---|---|---|
+| `python_tests` | Extract Python from the response, execute it in a temporary isolated interpreter, and run configured assertions | `code_executed`, `tests_passed` |
+| `json_schema` | Parse the response as JSON and validate required fields and primitive types | `schema_valid` |
+| `rubric` | Check required and forbidden phrases for a deterministic task-specific coverage score | `rubric_coverage` |
+
+The code check is a bounded subprocess convenience for benchmark isolation, not a security boundary for hostile code. Keep benchmark prompts and test contracts trusted, use a container for untrusted generations, and set a short per-case `timeout_seconds`. The `aislop` command remains an independent static-analysis signal and is not treated as a general answer-quality judge.
 
 ## Installation
 
@@ -127,8 +140,11 @@ This will:
 | `command` | Command array for subprocess runner — prompt appended as final argument |
 | `url` | OpenAI-compatible endpoint URL for HTTP runner (e.g., `"http://localhost:11434/v1/chat/completions"`) |
 | `timeout_seconds` | Per-prompt timeout |
+| `provider` | Metadata adapter: `"auto"` (default), `"lemonade"`, `"ollama"`, or `"lm-studio"` |
 
-> **Config fidelity:** with `type: "http"`, `model.parameters`, `seed`, and `max_tokens` are sent as the literal API request payload and recorded in `effective_request` — `sampler_settings_source` will be `"effective"`, meaning the logged config is provably what executed. With `type: "subprocess"`, `model.parameters` are logged as metadata only and are **not** forwarded to the subprocess command — `sampler_settings_source` will be `"unverified_metadata"`. Prefer `type: "http"` whenever possible for reproducible, comparable benchmark results.
+> **Config fidelity:** with `type: "http"`, `model.parameters`, `seed`, and `max_tokens` are sent as the literal API request payload and recorded in `effective_request`. This proves what the client sent, but not necessarily what the server applied. The run manifest performs a provider metadata preflight and records `provider_metadata`, `observed_*` fields, and `provider_field_verification`. Sampler settings remain `"sent_not_backend_verified"` in the evidence model unless the provider explicitly reports them. With `type: "subprocess"`, `model.parameters` are logged as metadata only and are **not** forwarded to the subprocess command. Prefer `type: "http"` whenever possible for reproducible, comparable benchmark results.
+
+The Lemonade adapter queries `/api/v1/models` and `/api/v1/health` before an HTTP run. It records the raw responses and normalizes model identity, checkpoint, artifact format, quantization, parameter count, context size, recipe, accelerator, server version, readiness, and the llama.cpp sampler defaults reported in `recipe_options.llamacpp_args`. These are loaded-model/server defaults, not proof of the values applied to an individual completion request; request-level values remain in `effective_request`. Ollama uses `/api/tags`; LM Studio uses the OpenAI-compatible `/v1/models` endpoint. A failed metadata query is recorded as `provider_metadata_status: "unavailable"` and does not abort the benchmark.
 
 > **TTFT:** with `type: "http"`, the runner sends `stream: true` and records `ttft_seconds` from the first SSE content token (`ttft_source: "streaming_api"`). With `type: "subprocess"`, TTFT is measured from the first non-whitespace stdout chunk (`ttft_source: "first_chunk_approx"`) and may be skewed by process/stdout buffering.
 
@@ -183,7 +199,17 @@ Each trial row includes (among other fields):
 | `case_content_hash` | SHA-256 prefix of the case definition (detects if a case changed between runs) |
 | `error` | `true` when the trial failed (inference or evaluation stage) |
 | `error_type` / `error_message` / `timed_out` / `stage` | Failure details when `error: true` |
-| `sampler_settings_source` | `"effective"` (HTTP: params provably sent in API request) \| `"unverified_metadata"` (subprocess: params logged but not forwarded) |
+| `sampler_settings_source` | `"sent_not_backend_verified"` (HTTP: params provably sent in API request) \| `"unverified_metadata"` (subprocess: params logged but not forwarded) |
+| `provider_metadata_status` | `"verified"`, `"unavailable"`, or `"not_requested"` for the provider preflight |
+| `provider_metadata` | Raw model/config response returned by the provider metadata endpoint |
+| `observed_model_id` / `observed_checkpoint` | Model identity reported by the provider |
+| `observed_model_format` / `observed_quantization` | Artifact facts reported or unambiguously encoded in the provider model identity |
+| `observed_parameter_count` / `observed_context_size` | Parameter count and context limit reported or normalized from provider metadata |
+| `observed_engine` / `observed_accelerator` | Serving recipe and hardware backend reported by the provider |
+| `observed_server_version` / `observed_model_status` | Provider version and loaded-model readiness state |
+| `observed_server_llamacpp_args` | Raw llama.cpp defaults reported by Lemonade |
+| `observed_server_sampler_defaults` | Parsed server defaults such as `temperature`, `top_p`, `top_k`, and `repeat_penalty` |
+| `provider_field_verification` | Per-field status: `verified_match`, `mismatch`, `server_reported`, or `unverified` |
 | `effective_command` | Actual subprocess command executed (subprocess runner) |
 | `effective_request` | Actual HTTP payload sent verbatim (HTTP runner), including `stream_options` |
 | `output_tokens` / `output_token_source` | Token count and source: `"api"` (backend-reported) \| `"unavailable"` (not reported) |

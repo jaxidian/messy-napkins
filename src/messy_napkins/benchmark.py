@@ -9,6 +9,8 @@ import re
 import shutil
 import statistics
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 from .config import BenchmarkCase, BenchmarkConfig
+from .provider import collect_provider_metadata
 
 MIN_DURATION_SECONDS = 0.0001
 CHUNK_SIZE_BYTES = 4096
@@ -470,6 +473,103 @@ def run_prompt_http_streaming(
 # Evaluation
 # ---------------------------------------------------------------------------
 
+CODE_BLOCK_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_python(source: str) -> str:
+    match = CODE_BLOCK_RE.search(source)
+    return match.group(1) if match else source
+
+
+def _validate_json_schema(value: Any, schema: dict[str, Any]) -> bool:
+    expected_type = schema.get("type")
+    type_matches = {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }
+    if expected_type and not type_matches.get(expected_type, False):
+        return False
+    if isinstance(value, dict):
+        if any(key not in value for key in schema.get("required", [])):
+            return False
+        properties = schema.get("properties", {})
+        if any(key in properties and not _validate_json_schema(value[key], properties[key]) for key in value):
+            return False
+    if isinstance(value, list) and "items" in schema:
+        if not all(_validate_json_schema(item, schema["items"]) for item in value):
+            return False
+    return True
+
+
+def evaluate_case_locally(
+    case: BenchmarkCase, generated_output: str
+) -> tuple[dict[str, float], bool | None, dict[str, Any]]:
+    """Run deterministic checks declared by a case without involving an LLM judge."""
+    contract = case.evaluation or {}
+    kind = contract.get("kind")
+    if not kind:
+        return {}, None, {}
+
+    if kind == "python_tests":
+        source = _extract_python(generated_output)
+        tests = contract.get("tests", [])
+        script = f"{source}\n\n" + "\n".join(str(test) for test in tests)
+        with tempfile.TemporaryDirectory(prefix="messy-napkins-test-") as temp_dir:
+            script_path = Path(temp_dir) / "generated_test.py"
+            script_path.write_text(script, encoding="utf-8")
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-I", str(script_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=float(contract.get("timeout_seconds", 5)),
+                    check=False,
+                )
+                passed = completed.returncode == 0
+                details = {
+                    "kind": kind,
+                    "return_code": completed.returncode,
+                    "stderr": completed.stderr[-2000:],
+                }
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                passed = False
+                details = {"kind": kind, "error": str(exc)}
+        score = float(passed)
+        return {"code_executed": score, "tests_passed": score}, passed, details
+
+    if kind == "json_schema":
+        try:
+            value = json.loads(generated_output)
+            valid = _validate_json_schema(value, contract.get("schema", {}))
+            details = {"kind": kind, "parsed": True, "schema_valid": valid}
+        except json.JSONDecodeError as exc:
+            valid = False
+            details = {"kind": kind, "parsed": False, "error": str(exc)}
+        return {"schema_valid": float(valid)}, valid, details
+
+    if kind == "rubric":
+        text = generated_output.lower()
+        required = [str(item).lower() for item in contract.get("required_phrases", [])]
+        forbidden = [str(item).lower() for item in contract.get("forbidden_phrases", [])]
+        required_hits = sum(phrase in text for phrase in required)
+        required_score = required_hits / len(required) if required else 1.0
+        forbidden_clear = not any(phrase in text for phrase in forbidden)
+        score = required_score if forbidden_clear else 0.0
+        details = {
+            "kind": kind,
+            "required_phrases": required,
+            "required_hits": required_hits,
+            "forbidden_phrases_found": [phrase for phrase in forbidden if phrase in text],
+        }
+        return {"rubric_coverage": score}, score >= float(contract.get("minimum_score", 1.0)), details
+
+    raise ValueError(f"Unsupported evaluation kind: {kind}")
+
 def evaluate_with_aislop(
     command: list[str],
     evaluation_payload: dict[str, Any],
@@ -533,6 +633,7 @@ def _compute_task_passed(
     generated_output: str,
     quality_scores: dict[str, float],
     evaluator_task_passed: bool | None,
+    local_task_passed: bool | None = None,
 ) -> bool | None:
     """Derive ``task_passed`` from pass_condition or evaluator result.
 
@@ -543,6 +644,9 @@ def _compute_task_passed(
        value if it provided one.
     3. Otherwise ``None`` (no pass judgement available).
     """
+    if local_task_passed is not None:
+        return local_task_passed
+
     if case.pass_condition == "exact_match":
         if case.expected_answer is not None:
             return generated_output.strip() == case.expected_answer.strip()
@@ -687,7 +791,11 @@ def _git_commit() -> str | None:
     return None
 
 
-def build_run_manifest(config: BenchmarkConfig, run_id: str) -> dict[str, Any]:
+def build_run_manifest(
+    config: BenchmarkConfig,
+    run_id: str,
+    provider_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a run manifest row capturing all provenance for this benchmark run.
 
     Written as the first row of the JSONL output so consumers can always find
@@ -706,8 +814,35 @@ def build_run_manifest(config: BenchmarkConfig, run_id: str) -> dict[str, Any]:
             "expected_answer": c.expected_answer,
             "pass_condition": c.pass_condition,
             "pass_threshold": c.pass_threshold,
+            "evaluation": c.evaluation,
         }, sort_keys=True).encode()
         case_content_hashes[c.id] = hashlib.sha256(content).hexdigest()[:16]
+
+    provider_metadata = provider_metadata or {
+        "provider": None,
+        "status": "not_requested",
+        "endpoint": None,
+        "raw": None,
+        "facts": {},
+    }
+    observed = provider_metadata.get("facts") or {}
+    configured = {
+        "model_id": config.model.id,
+        "model_format": "GGUF" if config.model.artifact_filename.lower().endswith(".gguf") else None,
+        "quantization": config.model.quantization or None,
+        "parameter_count": config.model.parameter_count or None,
+        "context_size": config.model.context_size,
+        "engine": config.model.engine.name or None,
+        "accelerator": config.model.engine.accelerator or None,
+    }
+    verification = {
+        key: (
+            "verified_match" if observed.get(key) == value else "mismatch"
+            if observed.get(key) is not None and value is not None else "server_reported"
+            if observed.get(key) is not None else "unverified"
+        )
+        for key, value in configured.items()
+    }
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -729,6 +864,30 @@ def build_run_manifest(config: BenchmarkConfig, run_id: str) -> dict[str, Any]:
         "model_revision": config.model.revision,
         "model_artifact_filename": config.model.artifact_filename,
         "model_artifact_checksum": config.model.artifact_checksum,
+        # Provider preflight metadata and evidence status
+        "provider": provider_metadata.get("provider"),
+        "provider_metadata_status": provider_metadata.get("status"),
+        "provider_metadata_endpoint": provider_metadata.get("endpoint"),
+        "provider_metadata": provider_metadata.get("raw"),
+        "provider_metadata_error": {
+            "type": provider_metadata.get("error_type"),
+            "message": provider_metadata.get("error_message"),
+        } if provider_metadata.get("status") == "unavailable" else None,
+        "observed_model_id": observed.get("model_id"),
+        "observed_checkpoint": observed.get("checkpoint"),
+        "observed_model_format": observed.get("model_format"),
+        "observed_quantization": observed.get("quantization"),
+        "observed_parameter_count": observed.get("parameter_count"),
+        "observed_context_size": observed.get("context_size"),
+        "observed_engine": observed.get("engine"),
+        "observed_accelerator": observed.get("accelerator"),
+        "observed_server_version": observed.get("server_version"),
+        "observed_model_status": observed.get("model_status"),
+        "observed_backend_health": observed.get("backend_health"),
+        "observed_device": observed.get("device"),
+        "observed_server_llamacpp_args": observed.get("server_llamacpp_args"),
+        "observed_server_sampler_defaults": observed.get("server_sampler_defaults"),
+        "provider_field_verification": verification,
         # Engine and hardware
         "engine_name": config.model.engine.name,
         "engine_version": config.model.engine.version,
@@ -786,6 +945,7 @@ def benchmark_case(
         "expected_answer": case.expected_answer,
         "pass_condition": case.pass_condition,
         "pass_threshold": case.pass_threshold,
+        "evaluation": case.evaluation,
     }, sort_keys=True).encode()
     case_content_hash = hashlib.sha256(case_content).hexdigest()[:16]
 
@@ -850,7 +1010,7 @@ def benchmark_case(
             )
             # With HTTP streaming, model.parameters/seed/max_tokens are the
             # literal API request payload — they are provably effective (Issue 1).
-            sampler_settings_source = "effective"
+            sampler_settings_source = "sent_not_backend_verified"
             ttft_source = "streaming_api"
 
             (
@@ -906,6 +1066,7 @@ def benchmark_case(
             "tokens_per_second": None,
             "decode_tokens_per_second": None,
             "quality_scores": None,
+            "evaluation_details": None,
             "task_passed": None,
             "evaluator_raw_output": None,
             **vram_telemetry,
@@ -955,13 +1116,18 @@ def benchmark_case(
         "expected_answer": case.expected_answer,
         "pass_condition": case.pass_condition,
         "pass_threshold": case.pass_threshold,
+        "evaluation": case.evaluation,
     }
     try:
+        local_scores, local_task_passed, evaluation_details = evaluate_case_locally(
+            case, generated_output
+        )
         quality_scores, evaluator_task_passed, evaluator_raw = evaluate_with_aislop(
             command=config.aislop.command,
             evaluation_payload=evaluation_payload,
             timeout_seconds=config.aislop.timeout_seconds,
         )
+        quality_scores = {**quality_scores, **local_scores}
     except Exception as exc:
         return {
             **base,
@@ -985,6 +1151,7 @@ def benchmark_case(
             "tokens_per_second": tps,
             "decode_tokens_per_second": decode_tps,
             "quality_scores": None,
+            "evaluation_details": None,
             "task_passed": None,
             "evaluator_raw_output": None,
             **vram_telemetry,
@@ -995,6 +1162,7 @@ def benchmark_case(
         generated_output=generated_output,
         quality_scores=quality_scores,
         evaluator_task_passed=evaluator_task_passed,
+        local_task_passed=local_task_passed,
     )
 
     return {
@@ -1018,6 +1186,7 @@ def benchmark_case(
         "decode_tokens_per_second": decode_tps,
         # Quality
         "quality_scores": quality_scores,
+        "evaluation_details": evaluation_details,
         "task_passed": task_passed,
         "evaluator_raw_output": evaluator_raw,
         **vram_telemetry,
@@ -1038,7 +1207,21 @@ def run_benchmark(config: BenchmarkConfig) -> list[dict[str, Any]]:
     ``trial`` rows, and (when ``trials > 1``) one ``aggregate`` row.
     """
     run_id = str(uuid.uuid4())
-    manifest = build_run_manifest(config, run_id)
+    if config.runner.type == "http":
+        provider_metadata = collect_provider_metadata(
+            provider=config.runner.provider,
+            runner_url=config.runner.url,
+            timeout_seconds=config.runner.timeout_seconds,
+        )
+    else:
+        provider_metadata = {
+            "provider": None,
+            "status": "not_requested",
+            "endpoint": None,
+            "raw": None,
+            "facts": {},
+        }
+    manifest = build_run_manifest(config, run_id, provider_metadata)
     append_jsonl(config.output.path, manifest)
     all_rows: list[dict[str, Any]] = [manifest]
 

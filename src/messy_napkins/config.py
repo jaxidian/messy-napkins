@@ -138,6 +138,7 @@ class RunnerConfig:
     timeout_seconds: int = 120
     type: str = "subprocess"  # "subprocess" | "http"
     url: str = ""             # OpenAI-compatible base URL, used when type="http"
+    provider: str = "auto"     # metadata adapter: auto | lemonade | ollama | lm-studio
 
 
 @dataclass
@@ -162,6 +163,7 @@ class BenchmarkCase:
     expected_answer: str | None = None # reference answer for deterministic pass checks
     pass_condition: str | None = None  # "exact_match" | "contains" | "score_threshold" | None
     pass_threshold: float | None = None  # score gate for "score_threshold" condition
+    evaluation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -182,6 +184,7 @@ class BenchmarkConfig:
             timeout_seconds=runner_data.get("timeout_seconds", 120),
             type=runner_data.get("type", "subprocess"),
             url=runner_data.get("url", ""),
+            provider=runner_data.get("provider", "auto"),
         )
         aislop = AislopConfig(**data["aislop"])
         output = OutputConfig(**data.get("output", {}))
