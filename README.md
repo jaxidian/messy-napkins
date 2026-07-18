@@ -10,11 +10,11 @@ messy-napkins/
 │   ├── examples/
 │   │   ├── README.md
 │   │   ├── aislop_evaluator.py
+│   │   ├── example-benchmark.json
 │   │   └── qwen3-14b-gguf.json
 │   ├── local/
 │   │   ├── .gitkeep
 │   │   └── SANITIZATION.md
-│   └── example-benchmark.json
 ├── docs/
 │   └── hosting/
 │       ├── README.md
@@ -83,7 +83,7 @@ export PYTHONPATH=src
 Run the benchmark CLI with the example config:
 
 ```bash
-uv run messy-napkins --config configs/example-benchmark.json
+uv run messy-napkins --config configs/examples/example-benchmark.json
 ```
 
 For machine-specific or private configurations, copy the example into
@@ -93,7 +93,7 @@ project:
 
 ```powershell
 New-Item -ItemType Directory -Force configs/local | Out-Null
-Copy-Item configs/example-benchmark.json configs/local/my-ollama.json
+Copy-Item configs/examples/example-benchmark.json configs/local/my-ollama.json
 uv run messy-napkins --config configs/local/my-ollama.json
 ```
 
@@ -110,12 +110,12 @@ and effective settings.
 
 You can keep multiple private configurations there, for example one per model
 or server. The runner loads the single file passed to `--config`; it does not
-merge a local file with `example-benchmark.json`.
+merge a local file with `configs/examples/example-benchmark.json`.
 
 Or without uv:
 
 ```bash
-PYTHONPATH=src python -m messy_napkins.runner --config configs/example-benchmark.json
+PYTHONPATH=src python -m messy_napkins.runner --config configs/examples/example-benchmark.json
 ```
 
 This will:
@@ -126,7 +126,7 @@ This will:
 5. Send a structured JSON evaluation payload to the configured `aislop` command for quality scoring.
 6. Write an aggregate row per case when `trials > 1`.
 
-> **Important:** the runner and aislop commands in `configs/example-benchmark.json` are stubs. Replace them with your real local model inference command and actual `aislop` invocation.
+> **Important:** the runner and aislop commands in `configs/examples/example-benchmark.json` are stubs. Replace them with your real local model inference command and actual `aislop` invocation.
 
 ## Configuration Reference
 
