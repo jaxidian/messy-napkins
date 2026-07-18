@@ -4,4 +4,8 @@ __pycache__/
 logs/*
 !logs/.gitkeep
 configs/local/
+!configs/local/
+configs/local/*
+!configs/local/.gitkeep
+!configs/local/SANITIZATION.md
 .vscode/

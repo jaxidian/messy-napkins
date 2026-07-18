@@ -1,0 +1,196 @@
+{
+  "name": "qwen3-14b-gguf-local",
+  "model": {
+    "id": "Qwen3-14B-GGUF",
+    "engine": {
+      "name": "lemonade",
+      "version": "11.0.0",
+      "accelerator": "vulkan",
+      "startup_flags": [
+        "--ctx-size",
+        "40960"
+      ]
+    },
+    "hardware": {
+      "gpu": "AMD Radeon RX 9070 XT",
+      "vram_gb": 16.0,
+      "cpu": "AMD Ryzen 9 9900X 12-Core Processor",
+      "os": "Windows 11",
+      "device_count": 1,
+      "driver_version": "",
+      "runtime_version": ""
+    },
+    "quantization": "Q4_0",
+    "parameter_count": "14B",
+    "seed": 42,
+    "max_tokens": 2048,
+    "context_size": 40960,
+    "parameters": {
+      "temperature": 0.2,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "repeat_penalty": 1.0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "source": "https://huggingface.co/unsloth/Qwen3-14B-GGUF",
+    "revision": "a04a82c4739b3ef5fa6da7d10261db2c67dd1985",
+    "artifact_filename": "Qwen3-14B-Q4_0.gguf",
+    "artifact_checksum": ""
+  },
+  "runner": {
+    "type": "http",
+    "url": "http://localhost:13305/v1/chat/completions",
+    "timeout_seconds": 120
+  },
+  "aislop": {
+    "command": [
+      "python",
+      "configs/examples/aislop_evaluator.py"
+    ],
+    "timeout_seconds": 60
+  },
+  "output": {
+    "path": "logs/example-qwen3-14b-gguf-results.jsonl"
+  },
+  "cases": [
+    {
+      "id": "code-gen-slugify",
+      "task": "code_gen",
+      "prompt": "Implement slugify(text) in Python. Return lowercase hyphen-separated words, remove punctuation, collapse whitespace, and return an empty string for empty input. Include only the implementation in a Python code block.",
+      "evaluation": {
+        "kind": "python_tests",
+        "tests": [
+          "assert slugify('Hello, World!') == 'hello-world'",
+          "assert slugify('  Multiple   spaces  ') == 'multiple-spaces'",
+          "assert slugify('') == ''",
+          "assert slugify('A/B test') == 'ab-test'"
+        ]
+      },
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "code-gen-merge-intervals",
+      "task": "code_gen",
+      "prompt": "Implement merge_intervals(intervals) in Python. Merge overlapping or touching [start, end] intervals, do not mutate the input, and return intervals sorted by start. Include only the implementation in a Python code block.",
+      "evaluation": {
+        "kind": "python_tests",
+        "tests": [
+          "assert merge_intervals([[1, 3], [2, 4], [8, 9]]) == [[1, 4], [8, 9]]",
+          "assert merge_intervals([[5, 6], [1, 2], [2, 5]]) == [[1, 6]]",
+          "original = [[1, 3], [2, 4]]; merge_intervals(original); assert original == [[1, 3], [2, 4]]",
+          "assert merge_intervals([]) == []"
+        ]
+      },
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "docs-create-user-api",
+      "task": "docs",
+      "prompt": "Write concise API documentation for POST /v1/users. State authentication, request fields and validation, a successful response, error status codes, and one curl example. Use headings and do not invent guarantees.",
+      "evaluation": {
+        "kind": "rubric",
+        "required_phrases": ["authentication", "request", "response", "status", "curl"],
+        "forbidden_phrases": ["guaranteed uptime", "never fails"],
+        "minimum_score": 1.0
+      },
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "structured-user-result",
+      "task": "structured_output",
+      "prompt": "Return only JSON with a string 'user_id', a string 'email', and a boolean 'active'. Do not use markdown.",
+      "evaluation": {
+        "kind": "json_schema",
+        "schema": {
+          "type": "object",
+          "required": ["user_id", "email", "active"],
+          "properties": {
+            "user_id": {"type": "string"},
+            "email": {"type": "string"},
+            "active": {"type": "boolean"}
+          }
+        }
+      },
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "instruction-following-exact",
+      "task": "instruction_following",
+      "prompt": "Reply with exactly the word DONE and nothing else.",
+      "expected_answer": "DONE",
+      "pass_condition": "exact_match",
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "reasoning-arithmetic",
+      "task": "reasoning",
+      "prompt": "A shelf has 3 boxes. Each box contains 4 packs, and each pack contains 5 screws. Return only the total number of screws as a base-10 integer.",
+      "expected_answer": "60",
+      "pass_condition": "exact_match",
+      "trials": 5,
+      "warmup_trials": 1
+    },
+    {
+      "id": "code-gen-ttl-lru-cache",
+      "task": "code_gen",
+      "prompt": "Implement a dependency-free, thread-safe TTLCache class in Python. Return only the implementation in a Python code block. Requirements: Constructor TTLCache(maxsize=128, default_ttl=None, clock=None). maxsize must be a positive integer or raise ValueError. default_ttl may be None or a positive number of seconds; zero and negative values raise ValueError. clock is an optional zero-argument callable returning a monotonic numeric timestamp; use time.monotonic when omitted. set(key, value, ttl=None) stores or replaces a value; ttl=None uses default_ttl; if both ttl and default_ttl are None, the item never expires; ttl must be positive when provided; replacing a key refreshes its expiration and makes it most recently used; when the cache exceeds maxsize, evict the least recently used unexpired item. get(key, default=None) returns the value and marks the key most recently used; returns default for missing or expired keys; removes expired entries when encountered. delete(key) removes a key if present and returns True, otherwise returns False; expired keys count as absent. clear() removes all entries. __len__() returns the number of unexpired entries. stats() returns a new dictionary with integer hits, misses, evictions, and expirations counters. A get of an expired key increments misses and expirations. An eviction caused by maxsize increments evictions. All get, set, delete, clear, len, and stats operations must be safe for concurrent callers. Do not expose internal mutable state. Use only the Python standard library.",
+      "evaluation": {
+        "kind": "python_tests",
+        "tests": [
+          "class FakeClock:\n    def __init__(self): self.now = 100.0\n    def __call__(self): return self.now\n    def advance(self, seconds): self.now += seconds",
+          "clock = FakeClock(); cache = TTLCache(maxsize=2, default_ttl=10, clock=clock)",
+          "assert len(cache) == 0",
+          "assert cache.get('missing') is None",
+          "assert cache.stats()['misses'] == 1",
+          "cache.set('a', 1)",
+          "assert cache.get('a') == 1",
+          "assert cache.stats()['hits'] == 1",
+          "clock.advance(9.9)",
+          "assert cache.get('a') == 1",
+          "clock.advance(0.2)",
+          "assert cache.get('a') is None",
+          "assert len(cache) == 0",
+          "assert cache.stats()['expirations'] == 1",
+          "cache.set('a', 1); cache.set('b', 2)",
+          "assert cache.get('a') == 1",
+          "cache.set('c', 3)",
+          "assert cache.get('b') is None",
+          "assert cache.get('a') == 1",
+          "assert cache.get('c') == 3",
+          "assert cache.stats()['evictions'] == 1",
+          "cache.set('short', 'value', ttl=2)",
+          "clock.advance(1.9)",
+          "assert cache.get('short') == 'value'",
+          "clock.advance(0.2)",
+          "assert cache.get('short') is None",
+          "cache.set('permanent', 42, ttl=None)",
+          "clock.advance(1000)",
+          "assert cache.get('permanent') == 42",
+          "cache.set('replace', 1, ttl=5)",
+          "clock.advance(2)",
+          "cache.set('replace', 2)",
+          "clock.advance(4)",
+          "assert cache.get('replace') == 2",
+          "assert cache.delete('replace') is True",
+          "assert cache.delete('replace') is False",
+          "cache.set('x', {'nested': [1]})",
+          "stats = cache.stats(); stats['hits'] = 999",
+          "assert cache.stats()['hits'] != 999",
+          "try:\n    TTLCache(maxsize=0)\n    assert False\nexcept ValueError:\n    pass",
+          "try:\n    TTLCache(maxsize=1, default_ttl=0)\n    assert False\nexcept ValueError:\n    pass",
+          "try:\n    cache.set('bad', 1, ttl=-1)\n    assert False\nexcept ValueError:\n    pass"
+        ]
+      },
+      "trials": 5,
+      "warmup_trials": 1
+    }
+  ]
+}

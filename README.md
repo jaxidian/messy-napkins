@@ -7,7 +7,19 @@ A multi-dimensional benchmarking framework for local LLMs. Log, score, and compa
 ```text
 messy-napkins/
 ├── configs/
+│   ├── examples/
+│   │   ├── README.md
+│   │   ├── aislop_evaluator.py
+│   │   └── qwen3-14b-gguf.json
+│   ├── local/
+│   │   ├── .gitkeep
+│   │   └── SANITIZATION.md
 │   └── example-benchmark.json
+├── docs/
+│   └── hosting/
+│       ├── README.md
+│       ├── lemonade.md
+│       └── qwen3-14b-gguf.md
 ├── logs/
 │   └── .gitkeep
 ├── src/
@@ -84,6 +96,17 @@ New-Item -ItemType Directory -Force configs/local | Out-Null
 Copy-Item configs/example-benchmark.json configs/local/my-ollama.json
 uv run messy-napkins --config configs/local/my-ollama.json
 ```
+
+Reference configurations for specific hardware and engines are available in
+`configs/examples/`. They are illustrative and may require substantial edits;
+create real machine-specific configurations in `configs/local/`. Review
+`configs/local/SANITIZATION.md` before publishing a local configuration as an
+example.
+
+Verified engine, model, and hardware findings are maintained in
+`docs/hosting/`. Use those profiles as source material when creating a local
+configuration, and preserve their distinction between requested, advertised,
+and effective settings.
 
 You can keep multiple private configurations there, for example one per model
 or server. The runner loads the single file passed to `--config`; it does not
