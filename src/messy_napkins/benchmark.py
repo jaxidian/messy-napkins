@@ -23,7 +23,7 @@ MIN_DURATION_SECONDS = 0.0001
 CHUNK_SIZE_BYTES = 4096
 STREAM_JOIN_TIMEOUT_SECONDS = 1.0
 VRAM_SAMPLE_INTERVAL_SECONDS = 0.2
-SCHEMA_VERSION = 2  # bumped when the JSONL schema has breaking changes
+SCHEMA_VERSION = 3  # bumped when the JSONL schema has breaking changes
 
 
 # ---------------------------------------------------------------------------
@@ -181,12 +181,43 @@ class VramSampler:
 def estimate_token_count(text: str) -> int:
     """Estimate token count via whitespace chunks.
 
-    Returns 0 for empty or whitespace-only input so that downstream code can
-    recognise "no output" and avoid reporting misleading positive TPS values.
-    This is a cross-model approximation only; rows record the source via
-    ``output_token_source`` (``"api"``, ``"estimated"``, or ``"unavailable"``).
+    Returns 0 for empty or whitespace-only input. This count is a coarse
+    cross-model approximation and is stored only as a diagnostic field
+    (``output_tokens_whitespace_approx``). It must **not** be used to compute
+    benchmark TPS figures — use API-reported token counts for that.
     """
     return len(re.findall(r"\S+", text))
+
+
+# ---------------------------------------------------------------------------
+# HTTP payload builder
+# ---------------------------------------------------------------------------
+
+def _build_http_payload(
+    model_id: str,
+    messages: list[dict[str, str]],
+    parameters: dict[str, Any],
+    seed: int | None,
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    """Build the OpenAI-compatible streaming chat completion payload.
+
+    Returns the exact dict that will be serialised and sent over the wire.
+    Callers should persist this same dict as ``effective_request`` so that the
+    logged config is provably identical to what was sent.
+    """
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        **parameters,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -356,45 +387,24 @@ def run_prompt_http(
 
 
 def run_prompt_http_streaming(
+    payload: dict[str, Any],
     url: str,
-    model_id: str,
-    prompt: str,
-    parameters: dict[str, Any],
-    seed: int | None,
-    max_tokens: int | None,
     timeout_seconds: int,
-    system_prompt: str | None = None,
 ) -> tuple[str, float, float, int | None, int | None]:
     """Run a prompt via an OpenAI-compatible /v1/chat/completions endpoint with SSE streaming.
+
+    Accepts the pre-built request ``payload`` (as returned by ``_build_http_payload``)
+    so that the caller can persist the exact dict as ``effective_request`` without
+    risk of divergence between what was logged and what was sent.
 
     Streams the response token by token so that ``ttft_seconds`` reflects the
     arrival of the *first content token* rather than the full round-trip time.
     This gives a valid TTFT figure for Lemonade, Ollama, LM Studio, and other
     OpenAI-compatible backends.
 
-    Sends ``stream_options: {include_usage: true}`` to request token counts in
-    the final SSE chunk; falls back gracefully if the backend doesn't support it.
-
     Returns ``(output, ttft_seconds, total_seconds, completion_tokens, prompt_tokens)``.
     The last two values are ``None`` if the backend didn't report usage.
     """
-    messages: list[dict[str, str]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    payload: dict[str, Any] = {
-        "model": model_id,
-        "messages": messages,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        **parameters,
-    }
-    if seed is not None:
-        payload["seed"] = seed
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         url,
@@ -683,6 +693,22 @@ def build_run_manifest(config: BenchmarkConfig, run_id: str) -> dict[str, Any]:
     Written as the first row of the JSONL output so consumers can always find
     the configuration and environment context for any trial in the same file.
     """
+    aislop_cmd_bytes = json.dumps(config.aislop.command, sort_keys=True).encode()
+    aislop_command_hash = hashlib.sha256(aislop_cmd_bytes).hexdigest()[:16]
+
+    case_content_hashes = {}
+    for c in config.cases:
+        content = json.dumps({
+            "id": c.id,
+            "task": c.task,
+            "prompt": c.prompt,
+            "system_prompt": c.system_prompt,
+            "expected_answer": c.expected_answer,
+            "pass_condition": c.pass_condition,
+            "pass_threshold": c.pass_threshold,
+        }, sort_keys=True).encode()
+        case_content_hashes[c.id] = hashlib.sha256(content).hexdigest()[:16]
+
     return {
         "schema_version": SCHEMA_VERSION,
         "row_type": "run_manifest",
@@ -698,19 +724,31 @@ def build_run_manifest(config: BenchmarkConfig, run_id: str) -> dict[str, Any]:
         "model_context_size": config.model.context_size,
         "model_seed": config.model.seed,
         "model_max_tokens": config.model.max_tokens,
+        # Model artifact provenance (optional; empty string when not provided)
+        "model_source": config.model.source,
+        "model_revision": config.model.revision,
+        "model_artifact_filename": config.model.artifact_filename,
+        "model_artifact_checksum": config.model.artifact_checksum,
         # Engine and hardware
         "engine_name": config.model.engine.name,
         "engine_version": config.model.engine.version,
         "engine_accelerator": config.model.engine.accelerator,
+        "engine_startup_flags": config.model.engine.startup_flags,
         "hardware_gpu": config.model.hardware.gpu,
         "hardware_vram_gb": config.model.hardware.vram_gb,
         "hardware_cpu": config.model.hardware.cpu,
         "hardware_os": config.model.hardware.os,
+        "hardware_device_count": config.model.hardware.device_count,
+        "hardware_driver_version": config.model.hardware.driver_version,
+        "hardware_runtime_version": config.model.hardware.runtime_version,
         # Runner configuration
         "runner_type": config.runner.type,
+        # Evaluator provenance
+        "aislop_command_hash": aislop_command_hash,
         # Benchmark structure
         "total_cases": len(config.cases),
         "case_ids": [c.id for c in config.cases],
+        "case_content_hashes": case_content_hashes,
         # Environment
         "python_version": platform.python_version(),
         "platform_info": platform.platform(),
@@ -737,6 +775,20 @@ def benchmark_case(
     failures without losing the trial record.
     """
     row_type = "warmup" if is_warmup else "trial"
+
+    # Compute a stable hash of the case content so downstream consumers can
+    # detect if the case definition changed between runs.
+    case_content = json.dumps({
+        "id": case.id,
+        "task": case.task,
+        "prompt": case.prompt,
+        "system_prompt": case.system_prompt,
+        "expected_answer": case.expected_answer,
+        "pass_condition": case.pass_condition,
+        "pass_threshold": case.pass_threshold,
+    }, sort_keys=True).encode()
+    case_content_hash = hashlib.sha256(case_content).hexdigest()[:16]
+
     base: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "row_type": row_type,
@@ -746,6 +798,7 @@ def benchmark_case(
         "benchmark_name": config.name,
         "case_id": case.id,
         "task": case.task,
+        "case_content_hash": case_content_hash,
         # Engine + hardware identity
         "engine_name": config.model.engine.name,
         "engine_version": config.model.engine.version,
@@ -776,6 +829,8 @@ def benchmark_case(
     api_prompt_tokens: int | None = None
     effective_request: dict[str, Any] | None = None
     effective_command: list[str] | None = None
+    ttft_source: str | None = None
+    sampler_settings_source: str = "unverified_metadata"
     inference_error: Exception | None = None
 
     try:
@@ -784,16 +839,19 @@ def benchmark_case(
             if case.system_prompt:
                 messages.append({"role": "system", "content": case.system_prompt})
             messages.append({"role": "user", "content": case.prompt})
-            effective_request = {
-                "model": config.model.id,
-                "messages": messages,
-                "stream": True,
-                **config.model.parameters,
-            }
-            if config.model.seed is not None:
-                effective_request["seed"] = config.model.seed
-            if config.model.max_tokens is not None:
-                effective_request["max_tokens"] = config.model.max_tokens
+            # Build the payload once; persist the same dict as effective_request so
+            # the logged config is provably identical to what was sent (Issue 3).
+            effective_request = _build_http_payload(
+                model_id=config.model.id,
+                messages=messages,
+                parameters=config.model.parameters,
+                seed=config.model.seed,
+                max_tokens=config.model.max_tokens,
+            )
+            # With HTTP streaming, model.parameters/seed/max_tokens are the
+            # literal API request payload — they are provably effective (Issue 1).
+            sampler_settings_source = "effective"
+            ttft_source = "streaming_api"
 
             (
                 generated_output,
@@ -802,17 +860,18 @@ def benchmark_case(
                 api_completion_tokens,
                 api_prompt_tokens,
             ) = run_prompt_http_streaming(
+                payload=effective_request,
                 url=config.runner.url,
-                model_id=config.model.id,
-                prompt=case.prompt,
-                parameters=config.model.parameters,
-                seed=config.model.seed,
-                max_tokens=config.model.max_tokens,
                 timeout_seconds=config.runner.timeout_seconds,
-                system_prompt=case.system_prompt,
             )
         else:
             effective_command = [*config.runner.command, case.prompt]
+            # Subprocess mode: model.parameters/seed/max_tokens are NOT forwarded
+            # to the process — they are logged as metadata only (Issue 1).
+            sampler_settings_source = "unverified_metadata"
+            # TTFT measured from first non-whitespace stdout chunk, which is
+            # subject to process/stdout buffering (Issue 4).
+            ttft_source = "first_chunk_approx"
             generated_output, ttft_seconds, total_seconds = run_prompt(
                 command=config.runner.command,
                 prompt=case.prompt,
@@ -827,6 +886,7 @@ def benchmark_case(
         exc = inference_error
         return {
             **base,
+            "sampler_settings_source": sampler_settings_source,
             "error": True,
             "error_type": type(exc).__name__,
             "error_message": str(exc),
@@ -837,9 +897,11 @@ def benchmark_case(
             "effective_request": effective_request,
             "output_tokens": None,
             "output_token_source": None,
+            "output_tokens_whitespace_approx": None,
             "prompt_tokens": None,
             "prompt_token_source": None,
             "ttft_seconds": None,
+            "ttft_source": None,
             "total_seconds": None,
             "tokens_per_second": None,
             "decode_tokens_per_second": None,
@@ -849,18 +911,18 @@ def benchmark_case(
             **vram_telemetry,
         }
 
-    # Token counts — prefer API-reported over whitespace estimate.
+    # Token counts — only use API-reported counts for benchmark metrics.
+    # Whitespace estimate is kept as an explicit diagnostic field but must not
+    # drive TPS comparisons since word counts differ across tokenizer families
+    # (Issue 2).
+    whitespace_approx = estimate_token_count(generated_output)
+
     if api_completion_tokens is not None:
-        output_tokens: int = api_completion_tokens
+        output_tokens: int | None = api_completion_tokens
         output_token_source = "api"
     else:
-        estimated = estimate_token_count(generated_output)
-        if estimated > 0:
-            output_tokens = estimated
-            output_token_source = "estimated"
-        else:
-            output_tokens = 0
-            output_token_source = "unavailable"
+        output_tokens = None
+        output_token_source = "unavailable"
 
     if api_prompt_tokens is not None:
         prompt_tokens: int | None = api_prompt_tokens
@@ -869,14 +931,16 @@ def benchmark_case(
         prompt_tokens = None
         prompt_token_source = "unavailable"
 
-    # TPS — null when token count is unavailable to avoid misleading values.
-    if output_tokens > 0 and total_seconds is not None:
+    # TPS — only computed when we have API-reported token counts.  Using
+    # whitespace estimates here would produce non-comparable figures across
+    # tokenizer families (Issue 2).
+    if output_tokens is not None and total_seconds is not None:
         tps: float | None = output_tokens / max(total_seconds, MIN_DURATION_SECONDS)
     else:
         tps = None
 
     decode_time = (total_seconds - ttft_seconds) if (total_seconds is not None and ttft_seconds is not None) else None
-    if output_tokens > 0 and decode_time is not None and decode_time > MIN_DURATION_SECONDS:
+    if output_tokens is not None and decode_time is not None and decode_time > MIN_DURATION_SECONDS:
         decode_tps: float | None = output_tokens / decode_time
     else:
         decode_tps = None
@@ -901,6 +965,7 @@ def benchmark_case(
     except Exception as exc:
         return {
             **base,
+            "sampler_settings_source": sampler_settings_source,
             "error": True,
             "error_type": type(exc).__name__,
             "error_message": str(exc),
@@ -911,9 +976,11 @@ def benchmark_case(
             "effective_request": effective_request,
             "output_tokens": output_tokens,
             "output_token_source": output_token_source,
+            "output_tokens_whitespace_approx": whitespace_approx,
             "prompt_tokens": prompt_tokens,
             "prompt_token_source": prompt_token_source,
             "ttft_seconds": ttft_seconds,
+            "ttft_source": ttft_source,
             "total_seconds": total_seconds,
             "tokens_per_second": tps,
             "decode_tokens_per_second": decode_tps,
@@ -932,6 +999,7 @@ def benchmark_case(
 
     return {
         **base,
+        "sampler_settings_source": sampler_settings_source,
         "error": False,
         "generated_output": generated_output,
         "effective_command": effective_command,
@@ -939,10 +1007,12 @@ def benchmark_case(
         # Token counts
         "output_tokens": output_tokens,
         "output_token_source": output_token_source,
+        "output_tokens_whitespace_approx": whitespace_approx,
         "prompt_tokens": prompt_tokens,
         "prompt_token_source": prompt_token_source,
         # Timing
         "ttft_seconds": ttft_seconds,
+        "ttft_source": ttft_source,
         "total_seconds": total_seconds,
         "tokens_per_second": tps,
         "decode_tokens_per_second": decode_tps,

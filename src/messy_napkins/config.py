@@ -18,6 +18,7 @@ class EngineConfig:
     name: str = ""         # serving software, e.g. "ollama", "lemonade", "lm-studio"
     version: str = ""      # engine version, e.g. "0.1.34"
     accelerator: str = ""  # hardware accelerator, e.g. "rocm", "vulkan", "cuda", "metal"
+    startup_flags: list[str] = field(default_factory=list)  # extra CLI flags passed to the engine
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EngineConfig":
@@ -25,6 +26,7 @@ class EngineConfig:
             name=data.get("name", ""),
             version=data.get("version", ""),
             accelerator=data.get("accelerator", ""),
+            startup_flags=data.get("startup_flags", []),
         )
 
 
@@ -37,10 +39,13 @@ class HardwareConfig:
     VRAM capacities.
     """
 
-    gpu: str = ""       # GPU model, e.g. "AMD RX 7900 XTX"
+    gpu: str = ""           # GPU model, e.g. "AMD RX 7900 XTX"
     vram_gb: float = 0.0
-    cpu: str = ""       # CPU model, e.g. "AMD Ryzen 9 7950X"
-    os: str = ""        # OS description, e.g. "Ubuntu 24.04"
+    cpu: str = ""           # CPU model, e.g. "AMD Ryzen 9 7950X"
+    os: str = ""            # OS description, e.g. "Ubuntu 24.04"
+    device_count: int = 0   # number of GPU devices used
+    driver_version: str = "" # GPU driver version, e.g. "545.23.08"
+    runtime_version: str = "" # CUDA/ROCm/Vulkan runtime version, e.g. "CUDA 12.3"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "HardwareConfig":
@@ -49,6 +54,9 @@ class HardwareConfig:
             vram_gb=float(data.get("vram_gb", 0.0)),
             cpu=data.get("cpu", ""),
             os=data.get("os", ""),
+            device_count=int(data.get("device_count", 0)),
+            driver_version=data.get("driver_version", ""),
+            runtime_version=data.get("runtime_version", ""),
         )
 
 
@@ -63,6 +71,9 @@ class ModelConfig:
     levels (e.g. Q4_K_M vs Q8_0) and model sizes (e.g. 7B vs 13B).
     ``seed`` and ``max_tokens`` affect reproducibility and TPS comparability —
     without a token cap, generation length varies run-to-run and confounds TPS.
+    ``source``, ``revision``, ``artifact_filename``, and ``artifact_checksum``
+    provide immutable identification of the model artifact so results can be
+    attributed to a specific file rather than just a human-readable name.
     """
 
     id: str
@@ -74,6 +85,11 @@ class ModelConfig:
     seed: int | None = None     # RNG seed for reproducibility; None = not set
     max_tokens: int | None = None  # generation cap; None = backend default
     parameters: dict[str, Any] = field(default_factory=dict)  # temperature, top_p, …
+    # Immutable artifact provenance (all optional; fill in what is known)
+    source: str = ""            # model source/repository, e.g. "https://huggingface.co/..."
+    revision: str = ""          # model revision/commit hash
+    artifact_filename: str = "" # artifact filename, e.g. "model-Q4_K_M.gguf"
+    artifact_checksum: str = "" # SHA-256 checksum of the model artifact file
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelConfig":
@@ -93,6 +109,10 @@ class ModelConfig:
             seed=data.get("seed"),
             max_tokens=data.get("max_tokens"),
             parameters=data.get("parameters", {}),
+            source=data.get("source", ""),
+            revision=data.get("revision", ""),
+            artifact_filename=data.get("artifact_filename", ""),
+            artifact_checksum=data.get("artifact_checksum", ""),
         )
 
 

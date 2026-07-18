@@ -13,6 +13,7 @@ from pathlib import Path
 
 from messy_napkins.benchmark import (
     VramSampler,
+    _build_http_payload,
     aggregate_trials,
     build_run_manifest,
     estimate_token_count,
@@ -218,6 +219,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertIn("config_hash", manifest)
             self.assertIn("python_version", manifest)
             self.assertEqual("test-run", manifest["benchmark_name"])
+            # Manifest provenance fields
+            self.assertIn("aislop_command_hash", manifest)
+            self.assertIn("case_content_hashes", manifest)
+            self.assertIn("case-1", manifest["case_content_hashes"])
 
             # Trial row
             self.assertEqual("case-1", result["case_id"])
@@ -226,11 +231,19 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertFalse(result["error"])
             # Run ID is consistent
             self.assertEqual(manifest["run_id"], result["run_id"])
-            # Token metrics
-            self.assertGreater(result["output_tokens"], 0)
-            self.assertEqual("estimated", result["output_token_source"])
-            self.assertIsNotNone(result["tokens_per_second"])
-            self.assertGreater(result["tokens_per_second"], 0)
+            # Case content hash present
+            self.assertIn("case_content_hash", result)
+            # Subprocess runner: no API token counts → output_tokens is None
+            self.assertIsNone(result["output_tokens"])
+            self.assertEqual("unavailable", result["output_token_source"])
+            # Whitespace approx is present as a diagnostic field (non-zero for non-empty output)
+            self.assertGreater(result["output_tokens_whitespace_approx"], 0)
+            # TPS is null because we lack API-reported token counts
+            self.assertIsNone(result["tokens_per_second"])
+            # Sampler settings are unverified for subprocess
+            self.assertEqual("unverified_metadata", result["sampler_settings_source"])
+            # TTFT is approximate for subprocess (buffering-dependent)
+            self.assertEqual("first_chunk_approx", result["ttft_source"])
             # Effective command present; effective_request absent for subprocess
             self.assertIsNotNone(result["effective_command"])
             self.assertIsNone(result["effective_request"])
@@ -290,7 +303,8 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertIsNotNone(agg["p95_ttft_seconds"])
             self.assertIsNotNone(agg["min_ttft_seconds"])
             self.assertIsNotNone(agg["max_ttft_seconds"])
-            self.assertIsNotNone(agg["mean_tokens_per_second"])
+            # Subprocess runner has no API token counts → TPS is null in aggregates
+            self.assertIsNone(agg["mean_tokens_per_second"])
             # Quality aggregate
             self.assertIn("total", agg["quality_scores_aggregate"])
             self.assertIsNotNone(agg["quality_scores_aggregate"]["total"]["mean"])
@@ -342,6 +356,88 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual("3.8B", row["model_parameter_count"])
             self.assertEqual(42, row["seed"])
             self.assertEqual(256, row["max_tokens"])
+
+    def test_run_benchmark_new_provenance_fields_in_model_and_engine(self) -> None:
+        """New artifact/engine/hardware provenance fields are persisted in manifest and trial rows."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "results.jsonl"
+            config = BenchmarkConfig.from_dict(
+                {
+                    **_base_config(str(output_path)),
+                    "model": {
+                        "id": "llama-3-8b",
+                        "context_size": 8192,
+                        "source": "https://huggingface.co/meta-llama/Meta-Llama-3-8B",
+                        "revision": "abc123def456",
+                        "artifact_filename": "Meta-Llama-3-8B-Q4_K_M.gguf",
+                        "artifact_checksum": "sha256:deadbeef00000000",
+                        "engine": {
+                            "name": "llama.cpp",
+                            "version": "b3000",
+                            "accelerator": "cuda",
+                            "startup_flags": ["-ngl", "99"],
+                        },
+                        "hardware": {
+                            "gpu": "RTX 4090",
+                            "vram_gb": 24.0,
+                            "cpu": "i9-13900K",
+                            "os": "Ubuntu 24.04",
+                            "device_count": 1,
+                            "driver_version": "545.23.08",
+                            "runtime_version": "CUDA 12.3",
+                        },
+                        "parameters": {},
+                    },
+                }
+            )
+            results = run_benchmark(config)
+            manifest = results[0]
+            row = results[1]
+
+            # Manifest provenance
+            self.assertEqual("https://huggingface.co/meta-llama/Meta-Llama-3-8B", manifest["model_source"])
+            self.assertEqual("abc123def456", manifest["model_revision"])
+            self.assertEqual("Meta-Llama-3-8B-Q4_K_M.gguf", manifest["model_artifact_filename"])
+            self.assertEqual("sha256:deadbeef00000000", manifest["model_artifact_checksum"])
+            self.assertEqual(["-ngl", "99"], manifest["engine_startup_flags"])
+            self.assertEqual(1, manifest["hardware_device_count"])
+            self.assertEqual("545.23.08", manifest["hardware_driver_version"])
+            self.assertEqual("CUDA 12.3", manifest["hardware_runtime_version"])
+            # Case content hashes present
+            self.assertIn("case-1", manifest["case_content_hashes"])
+            self.assertIsNotNone(manifest["case_content_hashes"]["case-1"])
+            # Evaluator command hash present
+            self.assertIn("aislop_command_hash", manifest)
+            # Trial row has case content hash
+            self.assertIn("case_content_hash", row)
+            # The trial case_content_hash should match the manifest's value for this case
+            self.assertEqual(manifest["case_content_hashes"]["case-1"], row["case_content_hash"])
+
+    def test_http_runner_computes_tps_from_api_tokens(self) -> None:
+        """HTTP runner with API-reported token counts produces non-null TPS."""
+        with _fake_streaming_openai_server(completion_tokens=10) as url, \
+                tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "results.jsonl"
+            config = BenchmarkConfig.from_dict(
+                {
+                    **_base_config(str(output_path)),
+                    "runner": {"type": "http", "url": url, "timeout_seconds": 10},
+                }
+            )
+            results = run_benchmark(config)
+            trial_rows = [r for r in results if r["row_type"] == "trial"]
+            row = trial_rows[0]
+            self.assertEqual("api", row["output_token_source"])
+            self.assertEqual(10, row["output_tokens"])
+            # TPS is computed from API tokens
+            self.assertIsNotNone(row["tokens_per_second"])
+            self.assertGreater(row["tokens_per_second"], 0)
+            # whitespace_approx is also present as a diagnostic field
+            self.assertIn("output_tokens_whitespace_approx", row)
+            # Sampler settings are effective for HTTP
+            self.assertEqual("effective", row["sampler_settings_source"])
+            # TTFT source is streaming_api
+            self.assertEqual("streaming_api", row["ttft_source"])
 
     # --- Trial failure handling ---
 
@@ -429,8 +525,11 @@ class BenchmarkRunnerTests(unittest.TestCase):
             self.assertEqual(1, len(trial_rows))
             row = trial_rows[0]
             self.assertFalse(row["error"])
-            self.assertEqual(0, row["output_tokens"])
+            # No API token counts; output_tokens is null regardless of whitespace count
+            self.assertIsNone(row["output_tokens"])
             self.assertEqual("unavailable", row["output_token_source"])
+            # Whitespace approx is 0 for empty output
+            self.assertEqual(0, row["output_tokens_whitespace_approx"])
             self.assertIsNone(row["tokens_per_second"])
             self.assertIsNone(row["decode_tokens_per_second"])
 
@@ -443,13 +542,16 @@ class BenchmarkRunnerTests(unittest.TestCase):
             completion_tokens=2,
             prompt_tokens=3,
         ) as url:
-            output, ttft_seconds, total_seconds, comp_tokens, prmpt_tokens = run_prompt_http_streaming(
-                url=url,
+            payload = _build_http_payload(
                 model_id="test-model",
-                prompt="hi",
+                messages=[{"role": "user", "content": "hi"}],
                 parameters={},
                 seed=None,
                 max_tokens=None,
+            )
+            output, ttft_seconds, total_seconds, comp_tokens, prmpt_tokens = run_prompt_http_streaming(
+                payload=payload,
+                url=url,
                 timeout_seconds=10,
             )
         self.assertEqual("hello world", output)
@@ -481,7 +583,13 @@ class BenchmarkRunnerTests(unittest.TestCase):
             # effective_request present; effective_command absent
             self.assertIsNotNone(row["effective_request"])
             self.assertIsNone(row["effective_command"])
+            # effective_request now matches the sent payload exactly — includes stream_options
             self.assertIn("stream", row["effective_request"])
+            self.assertIn("stream_options", row["effective_request"])
+            # Sampler settings are effective for HTTP runner
+            self.assertEqual("effective", row["sampler_settings_source"])
+            # TTFT source is streaming_api for HTTP runner
+            self.assertEqual("streaming_api", row["ttft_source"])
 
     # --- Effective config ---
 
