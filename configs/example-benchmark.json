@@ -1,0 +1,75 @@
+{
+  "name": "quick-local-baseline",
+  "model": {
+    "id": "example-model-q4",
+    "engine": {
+      "name": "ollama",
+      "version": "0.1.34",
+      "accelerator": "vulkan",
+      "startup_flags": []
+    },
+    "hardware": {
+      "gpu": "AMD RX 7900 XTX",
+      "vram_gb": 24.0,
+      "cpu": "AMD Ryzen 9 7950X",
+      "os": "Ubuntu 24.04",
+      "device_count": 1,
+      "driver_version": "",
+      "runtime_version": ""
+    },
+    "quantization": "Q4_K_M",
+    "parameter_count": "7B",
+    "seed": 42,
+    "max_tokens": 512,
+    "context_size": 32768,
+    "parameters": {
+      "temperature": 0.2,
+      "top_p": 0.95
+    },
+    "source": "",
+    "revision": "",
+    "artifact_filename": "",
+    "artifact_checksum": ""
+  },
+  "runner": {
+    "type": "http",
+    "url": "http://localhost:11434/v1/chat/completions",
+    "timeout_seconds": 30
+  },
+  "aislop": {
+    "command": [
+      "python3",
+      "-c",
+      "import json,sys; payload=json.loads(sys.stdin.read()); text=payload['generated_output']; print(json.dumps({'score': len(text) / 10}))"
+    ],
+    "timeout_seconds": 30
+  },
+  "output": {
+    "path": "logs/benchmark-results.jsonl"
+  },
+  "cases": [
+    {
+      "id": "code-gen-hello-world",
+      "task": "code_gen",
+      "prompt": "Write a Python hello world function.",
+      "trials": 3,
+      "warmup_trials": 1
+    },
+    {
+      "id": "docs-api-summary",
+      "task": "docs",
+      "prompt": "Document an API endpoint that creates a user.",
+      "trials": 3,
+      "warmup_trials": 1
+    },
+    {
+      "id": "prompt-following-exact",
+      "task": "system_prompt_following",
+      "prompt": "Reply with exactly the word DONE and nothing else.",
+      "expected_answer": "DONE",
+      "pass_condition": "exact_match",
+      "trials": 3,
+      "warmup_trials": 1
+    }
+  ]
+}
