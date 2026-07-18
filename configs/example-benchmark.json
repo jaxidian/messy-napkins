@@ -36,7 +36,7 @@
     "command": [
       "python3",
       "-c",
-      "import json,sys; text=sys.stdin.read(); print(json.dumps({'score': len(text) / 10}))"
+      "import json,sys; payload=json.loads(sys.stdin.read()); text=payload['generated_output']; print(json.dumps({'score': len(text) / 10}))"
     ],
     "timeout_seconds": 30
   },
@@ -48,19 +48,24 @@
       "id": "code-gen-hello-world",
       "task": "code_gen",
       "prompt": "Write a Python hello world function.",
-      "trials": 3
+      "trials": 3,
+      "warmup_trials": 1
     },
     {
       "id": "docs-api-summary",
       "task": "docs",
       "prompt": "Document an API endpoint that creates a user.",
-      "trials": 3
+      "trials": 3,
+      "warmup_trials": 1
     },
     {
-      "id": "prompt-following",
+      "id": "prompt-following-exact",
       "task": "system_prompt_following",
-      "prompt": "Respond with exactly three bullet points about observability.",
-      "trials": 3
+      "prompt": "Reply with exactly the word DONE and nothing else.",
+      "expected_answer": "DONE",
+      "pass_condition": "exact_match",
+      "trials": 3,
+      "warmup_trials": 1
     }
   ]
 }

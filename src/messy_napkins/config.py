@@ -106,10 +106,12 @@ class RunnerConfig:
     the user is responsible for keeping the wrapper script and the config in sync.
 
     When ``type`` is ``"http"``, the runner POSTs to an OpenAI-compatible
-    ``/v1/chat/completions`` endpoint at ``url``.  In this mode
-    ``model.parameters`` (temperature, top_p, …) plus ``model.seed`` and
-    ``model.max_tokens`` are sent as the actual request payload, so the logged
-    config is provably the config that executed.
+    ``/v1/chat/completions`` endpoint at ``url`` using the SSE streaming protocol
+    so that ``ttft_seconds`` measures the arrival of the first content token
+    rather than the full round-trip.  In this mode ``model.parameters``
+    (temperature, top_p, …) plus ``model.seed`` and ``model.max_tokens`` are
+    sent as the actual request payload, so the logged config is provably the
+    config that executed.
     """
 
     command: list[str] = field(default_factory=list)
@@ -134,7 +136,12 @@ class BenchmarkCase:
     id: str
     task: str
     prompt: str
-    trials: int = 1  # number of repeated runs; use >1 for reliability statistics
+    trials: int = 1           # number of recorded runs; use >1 for reliability statistics
+    warmup_trials: int = 0    # runs executed before recorded trials, excluded from aggregates
+    system_prompt: str | None = None   # optional system prompt forwarded to HTTP runner
+    expected_answer: str | None = None # reference answer for deterministic pass checks
+    pass_condition: str | None = None  # "exact_match" | "contains" | "score_threshold" | None
+    pass_threshold: float | None = None  # score gate for "score_threshold" condition
 
 
 @dataclass
