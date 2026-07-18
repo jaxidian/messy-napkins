@@ -61,6 +61,21 @@ Run the benchmark CLI with the example config:
 uv run messy-napkins --config configs/example-benchmark.json
 ```
 
+For machine-specific or private configurations, copy the example into
+`configs/local/` and edit the copy. That directory is ignored by Git, so the
+configuration stays local while remaining easy to organize alongside the
+project:
+
+```powershell
+New-Item -ItemType Directory -Force configs/local | Out-Null
+Copy-Item configs/example-benchmark.json configs/local/my-ollama.json
+uv run messy-napkins --config configs/local/my-ollama.json
+```
+
+You can keep multiple private configurations there, for example one per model
+or server. The runner loads the single file passed to `--config`; it does not
+merge a local file with `example-benchmark.json`.
+
 Or without uv:
 
 ```bash
