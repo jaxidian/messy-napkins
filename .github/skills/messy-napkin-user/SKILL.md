@@ -68,7 +68,12 @@ ambiguity (e.g. two configs equally match the observed metadata).
 5. **Run mode**: once a config is confirmed accurate (via step 3 or 4, or
    because the user already knows which one to use), run it with
    `messy-napkins --config <config path>` and report the results file path
-   (`logs/*.jsonl`) plus a brief summary of what ran.
+   (`logs/*.jsonl`) plus aggregate metrics when available: run ID, case/pass
+   counts, mean tokens/sec, mean TTFT, and other stable aggregate fields.
+   Treat the JSONL as the source of truth. The paired config Markdown may
+   contain a curated Mermaid dashboard, but this runner does not edit that
+   Markdown or any technical config; ask `model-configurator` to refresh the
+   dashboard when needed.
 6. **Report findings**: state what matched, what didn't, and what's Unknown
    (couldn't be probed), using Verified / Observed / Unknown labels. Do not
    silently fix a mismatched config.
@@ -81,4 +86,5 @@ ambiguity (e.g. two configs equally match the observed metadata).
 - [model-configurator](../model-configurator/SKILL.md) — the write-capable
   counterpart for creating or correcting configs and hosting docs.
 - [docs/hosting/README.md](../../../docs/hosting/README.md) — evidence-label
-  conventions.
+   conventions and the boundary between portable profiles and paired local
+   findings/dashboards.

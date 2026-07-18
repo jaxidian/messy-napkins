@@ -38,12 +38,16 @@ exactly for the full procedure.
 4. For verification requests, do a field-by-field comparison; run a small
    number of direct boundary probes via terminal only if necessary.
 5. For run requests, execute the confirmed config with the `messy-napkins`
-   CLI and report the resulting `logs/*.jsonl` path.
+   CLI, parse the resulting `logs/*.jsonl`, and report the run ID, case/pass
+   counts, mean tokens/sec, mean TTFT, and other stable aggregate metrics when
+   available. Treat JSONL as the source of truth; ask `model-configurator` to
+   refresh any paired Markdown dashboard rather than editing it here.
 6. Report matches, mismatches, and unknowns using Verified/Observed/Unknown
    labels.
 
 ## Output Format
 
 A concise findings report (identified/verified config name, matching and
-mismatched fields, one-line verdict) and, for Run requests, the results file
-path plus a brief summary of what ran. No config or doc file changes, ever.
+mismatched fields, one-line verdict) and, for Run requests, the JSONL results
+path, run ID, aggregate metrics, and a brief summary of what ran. No config or
+doc file changes, ever.

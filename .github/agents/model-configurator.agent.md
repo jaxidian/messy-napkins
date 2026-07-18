@@ -32,14 +32,30 @@ exactly for the full procedure.
    [create-context-boundary-config.py](../../configs/examples/create-context-boundary-config.py)).
 4. Fill remaining gaps by asking the user only what step 2-3 couldn't
    resolve.
-5. Write or correct the config under `configs/local/`, and always write or
+5. Validate recommended commands against the provider's accepted CLI. Keep
+   backend-specific flags in the provider-supported mechanism (for example,
+   Lemonade's `LEMONADE_LLAMACPP_ARGS`) instead of appending them blindly to
+   `lemonade run`. Mark any command not successfully executed as
+   Recommended/Untested.
+6. Write or correct the config under `configs/local/`, and always write or
    update the paired `configs/local/<name>.md` findings file next to it
-   (same base name) with that run's exact commands, evidence, and resulting
-   values. Only touch `docs/hosting/` when something genuinely portable was
-   learned — never as a substitute for the paired file.
+   (same base name) with that run's exact commands, evidence, resulting
+   values, and a clearly labeled **Recommended commands** section. Explain
+   every difference from the reported commands and label any untested
+   assumption. Only touch `docs/hosting/` when something genuinely portable
+   was learned — never as a substitute for the paired file.
+7. If matching `logs/*.jsonl` results exist, refresh the paired Markdown's
+   historical dashboard from `run_manifest` and `aggregate` rows. For a new
+   report, use [paired-findings-template.md](../skills/model-configurator/assets/paired-findings-template.md).
+   Include full run IDs/source links and Mermaid trend charts. Use
+   chronological artificial run numbers (`1`, `2`, `3`, ...) on chart axes
+   instead of GUIDs, while keeping JSONL as the source of truth. Do not copy
+   raw trial data into the report.
 
 ## Output Format
 
 The generated or corrected config file path, the paired `configs/local/<name>.md`
-findings file path, and — if applicable — the `docs/hosting/` section touched.
-Summarize what was Verified vs. Observed vs. Unknown.
+findings file path, its **Recommended commands** section, and — when results
+exist — its refreshed benchmark dashboard. Include the `logs/*.jsonl` source
+path and summarize what was Verified vs. Observed vs. Recommended vs.
+Unknown.

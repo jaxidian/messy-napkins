@@ -95,14 +95,22 @@ log.
 
 ## Recommended launch command
 
-Setting context size through both an environment variable and a CLI flag is a
-common source of confusion, especially when they disagree or when only one of
 them is later changed. Prefer a single explicit invocation and skip the
 environment variables unless a wrapper script requires them:
+Lemonade's `run` command does not accept arbitrary llama.cpp backend flags.
+Keep those flags in `LEMONADE_LLAMACPP_ARGS`; pass only options that Lemonade
+itself accepts on the `lemonade run` command. For this model, keep the context
+environment variable and CLI flag aligned:
 
 ```powershell
-lemonade run Qwen3-14B-GGUF --ctx-size 40960 --n-gpu-layers -1 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn --no-mmap
+$env:LEMONADE_CTX_SIZE = "40960"
+$env:LEMONADE_LLAMACPP_ARGS = "--n-gpu-layers -1 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn --no-mmap"
+lemonade run Qwen3-14B-GGUF --ctx-size 40960
 ```
+
+Appending the llama.cpp flags directly to `lemonade run` was tested and
+failed with Lemonade's "arguments were not expected" error. Do not use that
+form.
 
 Use the model's verified training context (see the model profile) as the
 `--ctx-size` value, not an aspirational larger number. Requesting more than
@@ -112,7 +120,9 @@ number in the launch command implied.
 
 If `LEMONADE_CTX_SIZE` and `--ctx-size` are ever set to different values at the
 same time, precedence between them has not been tested here and should be
-verified with a boundary probe before relying on it.
+verified with a boundary probe before relying on it. When changing either
+environment variable, unload or restart the model first if Lemonade retains a
+previously loaded instance.
 
 ## Windows-specific observations
 

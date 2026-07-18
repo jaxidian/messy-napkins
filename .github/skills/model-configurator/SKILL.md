@@ -50,21 +50,30 @@ that isn't computable from what's exposed).
    endpoints may not reveal custom launch flags (GPU layers, KV cache type,
    flash attention, mmap, etc.) — only the literal startup log proves those
    took effect. Label as Unknown if unavailable.
-5. **Fill remaining gaps** by asking the user only for what step 1-4 could
+5. **Validate the host CLI before recommending commands.** Backend-specific
+   flags must be placed where the provider accepts them (for example,
+   Lemonade's `LEMONADE_LLAMACPP_ARGS`), not blindly appended to the provider
+   command. If a proposed command has not been executed successfully, label
+   it Recommended/Untested and do not present it as a verified reproduction.
+6. **Fill remaining gaps** by asking the user only for what step 1-5 could
    not resolve.
-6. **Produce or update the config**: write `configs/local/<name>.json` with
+7. **Produce or update the config**: write `configs/local/<name>.json` with
    the verified `context_size`, `engine.startup_flags`, hardware,
    quantization, and source/revision where discoverable. If correcting an
    existing config, edit it in place rather than creating a duplicate.
-7. **Produce the paired findings file**: always write or update
+8. **Produce the paired findings file**: always write or update
    `configs/local/<name>.md` — same base name as the config, living right
    next to it. This file is married 1:1 to that exact config instance and is
    never portable. Include, dated: the exact hosting commands/env vars
    (verbatim), the live metadata snapshot, the boundary-probe evidence, and
-   the resulting field values with reasoning. This is the primary
-   deliverable requested by the user — do not skip it or substitute a
-   `docs/hosting/` entry for it.
-8. **Optionally update the portable knowledge base**: only when something
+   the resulting field values with reasoning. Also include a clearly labeled
+   **Recommended commands** section containing the ideal/simplified hosting
+   command(s) for reproducing the verified configuration, plus the reason for
+   each change from the reported commands. Distinguish commands that are
+   verified from commands that are merely recommended or still untested.
+   This is the primary deliverable requested by the user — do not skip it or
+   substitute a `docs/hosting/` entry for it.
+9. **Optionally update the portable knowledge base**: only when something
    genuinely reusable/general was learned (a new fact about the model or
    engine itself, not tied to this one host/run) — append a note to
    `docs/hosting/<model>.md` or `docs/hosting/<engine>.md` following the
@@ -72,7 +81,18 @@ that isn't computable from what's exposed).
    [docs/hosting/README.md](../../../docs/hosting/README.md) (Verified /
    Observed / Recommended / Unknown). Keep it general: do not paste the
    verbatim commands or session specifics that belong in the paired file
-   from step 7.
+   from step 8.
+10. **Maintain the benchmark dashboard when results exist**: if the paired
+    config has result JSONL under `logs/`, or the user provides a result path,
+    add or refresh a human-facing historical section in the paired `.md`.
+    Start from [paired-findings-template.md](./assets/paired-findings-template.md)
+    when creating a new report. Derive dashboard data from `run_manifest` and
+    `aggregate` rows only, keep the JSONL as the source of truth, include full
+    run IDs/source links, assign a chronological artificial run number (`1`,
+    `2`, `3`, ...) for table and Mermaid chart axes, and use Mermaid for
+    compact trend views such as mean tokens/sec, mean TTFT, pass counts, and
+    other stable aggregate metrics. Do not copy every trial into Markdown or
+    invent values when a field is absent.
 
 ## Output Contract
 

@@ -35,6 +35,13 @@ particular backend or hardware configuration cannot provide.
 5. Keep requested, model-supported, and effective context sizes distinct.
 6. Save private or machine-specific output under `configs/local/`.
 
+For a machine-specific config, keep its exact findings, recommended commands,
+and derived benchmark dashboard in the paired `configs/local/<name>.md` next
+to `configs/local/<name>.json`. Keep `logs/*.jsonl` as the source of truth for
+benchmark results; the paired Markdown may show curated tables and Mermaid
+trends with run IDs and source paths. Do not put host-specific command history
+or benchmark charts in these portable `docs/hosting/` profiles.
+
 Do not copy an observed value into a config merely because it is concrete.
 First check whether it belongs to the model, engine, accelerator, operating
 system, or one specific machine.
