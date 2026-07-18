@@ -135,3 +135,45 @@ claims about all Qwen3-14B prompts or quantizations.
 Do not compare these numbers directly with another engine, quantization,
 context allocation, thinking mode, or hardware profile without preserving the
 full run manifest.
+
+## Verification log
+
+Use this log to record each time the hosting configuration was independently
+re-checked, instead of trusting a remembered launch command. Each entry should
+state the reported command, the live evidence gathered, and the conclusion.
+
+### Entry: env-var + CLI hosting hypothesis
+
+- **Reported commands**:
+
+  ```powershell
+  $env:LEMONADE_CTX_SIZE = "65536"
+  $env:LEMONADE_LLAMACPP_ARGS = "--n-gpu-layers -1 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn --no-mmap"
+  lemonade run Qwen3-14B-GGUF --ctx-size 65536
+  ```
+
+- **Live metadata check** (`/api/v1/models` + `/api/v1/health`): model
+  `MaxContextWindow` reported `40960` while the loaded model's
+  `recipe_options.ctx_size` reported `65536` — the same requested-vs-advertised
+  split documented above, reproduced independently on a separate day.
+- **Boundary probe** (`configs/local/qwen3-context-verification-20260718.json`,
+  generated with `configs/examples/create-context-boundary-config.py --targets
+  20000 40500 41500`): a request with 20,024 API-reported prompt tokens
+  succeeded, a request with 40,524 API-reported prompt tokens succeeded, and a
+  request targeting 41,500 tokens returned an empty response with no token
+  usage — consistent with an effective ceiling at 40,960 total tokens
+  (prompt + `max_tokens`).
+- **`llamacpp_args` metadata**: did not contain `--n-gpu-layers`,
+  `--cache-type-k`, `--cache-type-v`, `--flash-attn`, or `--no-mmap` — only the
+  usual sampler defaults. Whether those flags actually took effect for this
+  load was not verifiable through the API; it requires the Lemonade startup
+  log.
+- **Conclusion**: the `--ctx-size 65536` / `LEMONADE_CTX_SIZE=65536` hypothesis
+  is incorrect for the effective context. The model still caps to its
+  40,960-token training context regardless of the requested value or how it
+  was requested (env var or CLI flag). The corrected, less-confusing launch
+  command is in the "Recommended launch command" section of
+  [lemonade.md](./lemonade.md).
+- **Resulting local config**: `configs/local/qwen3-14b-gguf.json` was updated
+  to `context_size: 40960` and `engine.startup_flags` starting with
+  `--ctx-size 40960`.

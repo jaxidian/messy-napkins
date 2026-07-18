@@ -79,6 +79,41 @@ Until requested and effective context receive separate manifest fields, inspect
 the raw `provider_metadata`, model startup log, and boundary-test behavior when
 the values disagree.
 
+### `llamacpp_args` metadata does not include custom launch flags
+
+Re-confirmed against a live server on a later date: `recipe_options.llamacpp_args`
+in `/api/v1/health` only ever contained Lemonade's own sampler defaults, for
+example `--temp 0.6 --top-p 0.85 --top-k 20 --min-p 0.0 --repeat-penalty 1.0`.
+A run launched with `LEMONADE_LLAMACPP_ARGS="--n-gpu-layers -1 --cache-type-k
+q4_0 --cache-type-v q4_0 --flash-attn --no-mmap"` did not show any of those
+flags in this metadata field.
+
+Do not treat `/api/v1/health` as proof that custom GPU-layer, KV-cache, flash
+attention, or mmap flags took effect. The only reliable evidence source for
+those flags is the exact `llama-server` command line in the Lemonade startup
+log.
+
+## Recommended launch command
+
+Setting context size through both an environment variable and a CLI flag is a
+common source of confusion, especially when they disagree or when only one of
+them is later changed. Prefer a single explicit invocation and skip the
+environment variables unless a wrapper script requires them:
+
+```powershell
+lemonade run Qwen3-14B-GGUF --ctx-size 40960 --n-gpu-layers -1 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn --no-mmap
+```
+
+Use the model's verified training context (see the model profile) as the
+`--ctx-size` value, not an aspirational larger number. Requesting more than
+the training context does not increase usable context; llama.cpp silently
+caps it, and the resulting run gets a smaller effective context than the
+number in the launch command implied.
+
+If `LEMONADE_CTX_SIZE` and `--ctx-size` are ever set to different values at the
+same time, precedence between them has not been tested here and should be
+verified with a boundary probe before relying on it.
+
 ## Windows-specific observations
 
 - Lemonade launched `llama-server.exe` from its user cache.
