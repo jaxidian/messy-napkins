@@ -1024,6 +1024,3 @@ def run_benchmark(config: BenchmarkConfig) -> list[dict[str, Any]]:
             all_rows.append(agg)
 
     return all_rows
-
-
-

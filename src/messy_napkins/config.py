@@ -106,9 +106,9 @@ class RunnerConfig:
     the user is responsible for keeping the wrapper script and the config in sync.
 
     When ``type`` is ``"http"``, the runner POSTs to an OpenAI-compatible
-    ``/v1/chat/completions`` endpoint at ``url`` using the SSE streaming protocol
-    so that ``ttft_seconds`` measures the arrival of the first content token
-    rather than the full round-trip.  In this mode ``model.parameters``
+    ``/v1/chat/completions`` endpoint at ``url`` using Server-Sent Events (SSE)
+    streaming so that ``ttft_seconds`` measures the arrival of the first content
+    token rather than the full round-trip.  In this mode ``model.parameters``
     (temperature, top_p, …) plus ``model.seed`` and ``model.max_tokens`` are
     sent as the actual request payload, so the logged config is provably the
     config that executed.
