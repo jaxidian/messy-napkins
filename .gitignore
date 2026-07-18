@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-logs/benchmark-results.jsonl
+logs/*
+!logs/.gitkeep
+configs/local/
 .vscode/
